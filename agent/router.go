@@ -20,7 +20,7 @@ type ChannelStatus struct {
 	QueueDepth int       `json:"queue_depth"`
 }
 
-// AgentResources holds the Discord session and memory store for a configured agent.
+// AgentResources holds the config, memory store, and Discord session for a configured agent.
 type AgentResources struct {
 	Config  *config.AgentConfig
 	Memory  *memory.Store
@@ -57,13 +57,13 @@ func (r *Router) Route(msg *discordgo.MessageCreate) {
 		serverID = "DM:" + msg.Author.ID
 	}
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	resources, ok := r.agentsByServerID[serverID]
 	if !ok {
 		return // unconfigured server, silently ignore
 	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	if agent, ok := r.agents[channelID]; ok {
 		select {
