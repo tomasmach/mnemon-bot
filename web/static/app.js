@@ -99,10 +99,10 @@ function renderAgentSidebar() {
 }
 
 function showPanel(name) {
-  document.getElementById('panel-empty').hidden = (name !== 'empty');
-  document.getElementById('panel-config').hidden = (name !== 'config');
-  document.getElementById('panel-new-agent').hidden = (name !== 'new-agent');
-  document.getElementById('panel-agent').hidden = (name !== 'agent');
+  document.getElementById('panel-empty').hidden = name !== 'empty';
+  document.getElementById('panel-config').hidden = name !== 'config';
+  document.getElementById('panel-new-agent').hidden = name !== 'new-agent';
+  document.getElementById('panel-agent').hidden = name !== 'agent';
   document.getElementById('btn-settings').classList.toggle('active', name === 'config');
 }
 
@@ -167,10 +167,7 @@ function saveAgentConfig() {
 }
 
 function setCfgStatus(msg, isError) {
-  const el = document.getElementById('cfg-status');
-  el.textContent = msg;
-  el.className = 'status-msg' + (isError ? ' error' : '');
-  if (!isError) setTimeout(() => { el.textContent = ''; }, 3000);
+  setStatus('cfg-status', msg, isError);
 }
 
 // --- Soul tab ---
@@ -215,10 +212,7 @@ function saveSoul() {
 }
 
 function setSoulStatus(msg, isError) {
-  const el = document.getElementById('soul-status');
-  el.textContent = msg;
-  el.className = 'status-msg' + (isError ? ' error' : '');
-  if (!isError) setTimeout(() => { el.textContent = ''; }, 3000);
+  setStatus('soul-status', msg, isError);
 }
 
 // --- Global config ---
@@ -260,10 +254,7 @@ function saveConfig() {
 }
 
 function setConfigStatus(msg, isError) {
-  const el = document.getElementById('config-status');
-  el.textContent = msg;
-  el.className = 'status-msg' + (isError ? ' error' : '');
-  if (!isError) setTimeout(() => { el.textContent = ''; }, 3000);
+  setStatus('config-status', msg, isError);
 }
 
 // --- New agent ---
@@ -313,9 +304,7 @@ function createAgent() {
 }
 
 function setNewAgentStatus(msg, isError) {
-  const el = document.getElementById('new-agent-status');
-  el.textContent = msg;
-  el.className = 'status-msg' + (isError ? ' error' : '');
+  setStatus('new-agent-status', msg, isError);
 }
 
 function deleteSelectedAgent() {
@@ -386,6 +375,8 @@ function renderMemories(data, serverID) {
     grid.appendChild(card);
   });
 }
+
+// --- Delete modal ---
 
 let pendingDeleteID = null;
 let pendingDeleteServerID = null;
@@ -520,6 +511,13 @@ function renderMonitorAgents(agentStatuses) {
 }
 
 // --- Utility ---
+
+function setStatus(elementId, msg, isError) {
+  const el = document.getElementById(elementId);
+  el.textContent = msg;
+  el.className = 'status-msg' + (isError ? ' error' : '');
+  if (!isError) setTimeout(() => { el.textContent = ''; }, 3000);
+}
 
 function esc(str) {
   return String(str)

@@ -54,10 +54,7 @@ func main() {
 	for i := range cfg.Agents {
 		agentCfg := &cfg.Agents[i]
 		dbPath := agentCfg.ResolveDBPath(cfg.Memory.DBPath)
-
-		// Create a MemoryConfig pointing to this agent's DB path
-		agentMemCfg := config.MemoryConfig{DBPath: dbPath}
-		mem, err := memory.New(&agentMemCfg, llmClient)
+		mem, err := memory.New(&config.MemoryConfig{DBPath: dbPath}, llmClient)
 		if err != nil {
 			slog.Error("failed to open memory store for agent", "agent", agentCfg.ID, "error", err)
 			os.Exit(1)

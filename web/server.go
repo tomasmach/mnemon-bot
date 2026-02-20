@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -345,11 +344,9 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	defer s.writeMu.Unlock()
 
 	cfg := s.cfgStore.Get()
-	for _, a := range cfg.Agents {
-		if a.ID == input.ID {
-			http.Error(w, "agent id already exists", http.StatusConflict)
-			return
-		}
+	if findAgentIndex(cfg.Agents, input.ID) != -1 {
+		http.Error(w, "agent id already exists", http.StatusConflict)
+		return
 	}
 
 	newAgents := make([]config.AgentConfig, len(cfg.Agents)+1)
@@ -378,24 +375,19 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	defer s.writeMu.Unlock()
 
 	cfg := s.cfgStore.Get()
-	newAgents := make([]config.AgentConfig, len(cfg.Agents))
-	copy(newAgents, cfg.Agents)
-	found := false
-	for i, a := range newAgents {
-		if a.ID == id {
-			if input.Token == "" {
-				input.Token = a.Token // preserve existing token if not updated
-			}
-			input.ID = id // ensure ID unchanged
-			newAgents[i] = input
-			found = true
-			break
-		}
-	}
-	if !found {
+	idx := findAgentIndex(cfg.Agents, id)
+	if idx == -1 {
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
 	}
+
+	newAgents := make([]config.AgentConfig, len(cfg.Agents))
+	copy(newAgents, cfg.Agents)
+	if input.Token == "" {
+		input.Token = newAgents[idx].Token // preserve existing token if not updated
+	}
+	input.ID = id // ensure ID unchanged
+	newAgents[idx] = input
 
 	if err := s.writeAgents(newAgents); err != nil {
 		slog.Error("write agents", "error", err)
@@ -412,18 +404,18 @@ func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 	defer s.writeMu.Unlock()
 
 	cfg := s.cfgStore.Get()
-	newAgents := make([]config.AgentConfig, 0, len(cfg.Agents))
-	var deletedServerID string
-	for _, a := range cfg.Agents {
-		if a.ID == id {
-			deletedServerID = a.ServerID
-			continue
-		}
-		newAgents = append(newAgents, a)
-	}
-	if deletedServerID == "" {
+	idx := findAgentIndex(cfg.Agents, id)
+	if idx == -1 {
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
+	}
+	serverID := cfg.Agents[idx].ServerID
+
+	newAgents := make([]config.AgentConfig, 0, len(cfg.Agents)-1)
+	for i, a := range cfg.Agents {
+		if i != idx {
+			newAgents = append(newAgents, a)
+		}
 	}
 
 	if err := s.writeAgents(newAgents); err != nil {
@@ -432,24 +424,29 @@ func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.router.UnloadAgent(deletedServerID)
+	s.router.UnloadAgent(serverID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// findAgentIndex returns the index of the agent with the given ID, or -1 if not found.
+func findAgentIndex(agents []config.AgentConfig, id string) int {
+	for i, a := range agents {
+		if a.ID == id {
+			return i
+		}
+	}
+	return -1
 }
 
 func (s *Server) handleGetAgentSoul(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	cfg := s.cfgStore.Get()
-	var found *config.AgentConfig
-	for i := range cfg.Agents {
-		if cfg.Agents[i].ID == id {
-			found = &cfg.Agents[i]
-			break
-		}
-	}
-	if found == nil {
+	idx := findAgentIndex(cfg.Agents, id)
+	if idx == -1 {
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
 	}
+	found := &cfg.Agents[idx]
 
 	w.Header().Set("Content-Type", "application/json")
 	if found.SoulFile == "" {
@@ -461,7 +458,7 @@ func (s *Server) handleGetAgentSoul(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	expanded := expandServerPath(found.SoulFile)
+	expanded := config.ExpandPath(found.SoulFile)
 	data, err := os.ReadFile(expanded)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -495,13 +492,7 @@ func (s *Server) handlePutAgentSoul(w http.ResponseWriter, r *http.Request) {
 	defer s.writeMu.Unlock()
 
 	cfg := s.cfgStore.Get()
-	agentIdx := -1
-	for i, a := range cfg.Agents {
-		if a.ID == id {
-			agentIdx = i
-			break
-		}
-	}
+	agentIdx := findAgentIndex(cfg.Agents, id)
 	if agentIdx == -1 {
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
@@ -515,7 +506,7 @@ func (s *Server) handlePutAgentSoul(w http.ResponseWriter, r *http.Request) {
 		soulPath = filepath.Join(filepath.Dir(s.cfgPath), "souls", id+".md")
 		needsConfigUpdate = true
 	} else {
-		soulPath = expandServerPath(agent.SoulFile)
+		soulPath = config.ExpandPath(agent.SoulFile)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(soulPath), 0o755); err != nil {
@@ -542,15 +533,6 @@ func (s *Server) handlePutAgentSoul(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"path": soulPath})
-}
-
-func expandServerPath(path string) string {
-	path = os.ExpandEnv(path)
-	if strings.HasPrefix(path, "~/") {
-		home, _ := os.UserHomeDir()
-		path = filepath.Join(home, path[2:])
-	}
-	return path
 }
 
 // writeAgents replaces the [[agents]] section in the config file and reloads.

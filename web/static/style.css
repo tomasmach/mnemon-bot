@@ -638,6 +638,7 @@ dialog::backdrop { background: hsla(var(--hue), 20%, 4%, 0.75); }
 }
 
 .modal-content h3 { font-size: 0.95rem; font-weight: 600; }
+.modal-description { font-size: 0.875rem; color: var(--ink-faint); }
 
 #edit-textarea {
   width: 100%;

@@ -71,9 +71,9 @@ type AgentConfig struct {
 // Otherwise derives: dir(defaultDBPath)/agents/<server_id>/memory.db
 func (a *AgentConfig) ResolveDBPath(defaultDBPath string) string {
 	if a.DBPath != "" {
-		return expandPath(a.DBPath)
+		return ExpandPath(a.DBPath)
 	}
-	dir := filepath.Dir(expandPath(defaultDBPath))
+	dir := filepath.Dir(ExpandPath(defaultDBPath))
 	return filepath.Join(dir, "agents", a.ServerID, "memory.db")
 }
 
@@ -82,7 +82,8 @@ type ChannelConfig struct {
 	ResponseMode string `toml:"response_mode" json:"response_mode,omitempty"`
 }
 
-func expandPath(path string) string {
+// ExpandPath expands environment variables and ~ in a file path.
+func ExpandPath(path string) string {
 	path = os.ExpandEnv(path)
 	if strings.HasPrefix(path, "~/") {
 		home, _ := os.UserHomeDir()
