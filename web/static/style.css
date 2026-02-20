@@ -12,6 +12,7 @@
   --ink-faint:    hsl(var(--hue), 10%, 45%);
   --accent:       hsl(208, 100%, 57%);
   --accent-deep:  hsl(208, 100%, 47%);
+  --accent-glow:  hsla(208, 100%, 57%, 0.25);
   --green:        hsl(152, 60%, 52%);
   --red:          hsl(0, 65%, 62%);
   --amber:        hsl(38, 90%, 58%);
@@ -258,7 +259,7 @@ body {
 #soul-editor:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px hsla(208, 100%, 57%, 0.25);
+  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 .form-actions {
@@ -399,7 +400,7 @@ input[type="text"], input[type="password"] {
 input[type="text"]:focus, input[type="password"]:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px hsla(208, 100%, 57%, 0.25);
+  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 select {
@@ -415,7 +416,7 @@ select {
 select:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px hsla(208, 100%, 57%, 0.25);
+  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 /* Result count badge */
@@ -627,7 +628,7 @@ dialog::backdrop { background: hsla(var(--hue), 20%, 4%, 0.75); }
 #edit-textarea:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px hsla(208, 100%, 57%, 0.25);
+  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
