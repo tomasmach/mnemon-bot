@@ -2,17 +2,21 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/tomasmach/mnemon-bot/agent"
 	"github.com/tomasmach/mnemon-bot/bot"
 	"github.com/tomasmach/mnemon-bot/config"
 	"github.com/tomasmach/mnemon-bot/llm"
 	"github.com/tomasmach/mnemon-bot/memory"
+	"github.com/tomasmach/mnemon-bot/web"
 )
 
 func main() {
@@ -28,18 +32,20 @@ func main() {
 		cfgPath = *configPath
 	}
 
-	cfg, err := config.Load(cfgPath)
+	cfgStore, err := config.NewStore(cfgPath)
 	if err != nil {
 		slog.Error("failed to load config", "error", err, "path", cfgPath)
 		os.Exit(1)
 	}
 	slog.Info("config loaded", "path", cfgPath)
 
+	cfg := cfgStore.Get()
+
 	if cfg.Tools.WebSearchKey == "" {
 		slog.Warn("tools.web_search_key not set, web_search tool disabled")
 	}
 
-	llmClient := llm.New(&cfg.LLM)
+	llmClient := llm.New(cfgStore)
 
 	mem, err := memory.New(&cfg.Memory, llmClient)
 	if err != nil {
@@ -57,7 +63,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	router := agent.NewRouter(ctx, cfg, llmClient, mem, b.Session())
+	router := agent.NewRouter(ctx, cfgStore, llmClient, mem, b.Session())
 	b.SetRouter(router)
 
 	if err := b.Start(); err != nil {
@@ -66,11 +72,27 @@ func main() {
 	}
 	slog.Info("bot started")
 
+	webAddr := cfgStore.Get().Web.Addr
+	if webAddr == "" {
+		webAddr = ":8080"
+	}
+	webServer := web.New(webAddr, cfgStore, cfgPath, mem, router)
+	webServer.StartStatusPoller(ctx)
+	go func() {
+		if err := webServer.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("web server", "error", err)
+		}
+	}()
+	slog.Info("web server started", "addr", webAddr)
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	<-sigCh
 
 	slog.Info("shutting down")
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutCancel()
+	_ = webServer.Shutdown(shutCtx)
 	b.Stop()
 	cancel()
 	router.WaitForDrain()

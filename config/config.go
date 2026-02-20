@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/BurntSushi/toml"
 )
@@ -16,16 +17,21 @@ type Config struct {
 	Agent    AgentConfig
 	Response ResponseConfig
 	Tools    ToolsConfig
+	Web      WebConfig
 	Servers  []ServerConfig
 }
 
+type WebConfig struct {
+	Addr string `toml:"addr"` // default ":8080"
+}
+
 type BotConfig struct {
-	Token    string `toml:"token"`
+	Token    string `toml:"token" json:"-"`
 	SoulFile string `toml:"soul_file"`
 }
 
 type LLMConfig struct {
-	OpenRouterKey         string `toml:"openrouter_key"`
+	OpenRouterKey         string `toml:"openrouter_key" json:"-"`
 	Model                 string `toml:"model"`
 	EmbeddingModel        string `toml:"embedding_model"`
 	RequestTimeoutSeconds int    `toml:"request_timeout_seconds"`
@@ -46,7 +52,7 @@ type ResponseConfig struct {
 }
 
 type ToolsConfig struct {
-	WebSearchKey string `toml:"web_search_key"`
+	WebSearchKey string `toml:"web_search_key" json:"-"`
 }
 
 type ServerConfig struct {
@@ -68,6 +74,9 @@ func Load(path string) (*Config, error) {
 	}
 
 	// Apply defaults
+	if cfg.Web.Addr == "" {
+		cfg.Web.Addr = ":8080"
+	}
 	if cfg.LLM.RequestTimeoutSeconds == 0 {
 		cfg.LLM.RequestTimeoutSeconds = 60
 	}
@@ -126,6 +135,37 @@ func Resolve() string {
 		return path
 	}
 	return abs
+}
+
+type Store struct {
+	mu   sync.RWMutex
+	cfg  *Config
+	path string
+}
+
+func NewStore(path string) (*Store, error) {
+	cfg, err := Load(path)
+	if err != nil {
+		return nil, err
+	}
+	return &Store{cfg: cfg, path: path}, nil
+}
+
+func (s *Store) Get() *Config {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg
+}
+
+func (s *Store) Reload() (*Config, error) {
+	cfg, err := Load(s.path)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.cfg = cfg
+	s.mu.Unlock()
+	return cfg, nil
 }
 
 // ResolveResponseMode returns the effective response mode for a server/channel pair.
