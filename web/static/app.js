@@ -1,211 +1,271 @@
 'use strict';
 
-// --- View switching ---
+// --- State ---
 
-const VIEWS = ['config', 'agents', 'memories', 'monitor'];
+let agents = [];
+let selectedAgentId = null;
+let selectedDetailTab = 'config';
+let currentMemServerID = null;
 
-function showView(name) {
-  VIEWS.forEach(v => {
-    document.getElementById('view-' + v).hidden = (v !== name);
-    document.getElementById('nav-' + v).classList.toggle('active', v === name);
+// --- Init ---
+
+function init() {
+  loadAgents();
+  connectSSE();
+}
+
+// --- Agent sidebar ---
+
+function loadAgents() {
+  return fetch('/api/agents')
+    .then(r => r.json())
+    .then(data => {
+      agents = data || [];
+      renderAgentSidebar();
+    })
+    .catch(() => console.error('Failed to load agents'));
+}
+
+function renderAgentSidebar() {
+  const list = document.getElementById('agent-sidebar-list');
+  list.innerHTML = '';
+  if (!agents.length) {
+    list.innerHTML = '<p class="empty-msg" style="padding:0.75rem 0.5rem;font-size:0.8rem;">No agents configured yet.</p>';
+    return;
+  }
+  agents.forEach(a => {
+    const item = document.createElement('button');
+    item.className = 'sidebar-agent-item' + (a.id === selectedAgentId ? ' active' : '');
+    item.innerHTML =
+      '<span class="agent-item-name">' + esc(a.id) + '</span>' +
+      '<span class="agent-item-server">' + esc(a.server_id) + '</span>';
+    item.addEventListener('click', () => selectAgent(a.id));
+    list.appendChild(item);
   });
-  if (name === 'config' && !configLoaded) loadConfig();
-  if (name === 'agents') loadAgents();
-  if (name === 'memories') loadAgentList(); // populate dropdown
+}
+
+function selectAgent(id) {
+  selectedAgentId = id;
+  renderAgentSidebar();
+
+  const agent = agents.find(a => a.id === id);
+  if (!agent) return;
+
+  document.getElementById('agent-detail-name').textContent = id;
+  document.getElementById('cfg-server-id').value = agent.server_id || '';
+  document.getElementById('cfg-token').value = '';
+  document.getElementById('cfg-soul-file').value = agent.soul_file || '';
+  document.getElementById('cfg-db-path').value = agent.db_path || '';
+  document.getElementById('cfg-response-mode').value = agent.response_mode || '';
+  document.getElementById('cfg-status').textContent = '';
+
+  showPanel('agent');
+  showDetailTab(selectedDetailTab);
+}
+
+function showPanel(name) {
+  document.getElementById('panel-empty').hidden = (name !== 'empty');
+  document.getElementById('panel-new-agent').hidden = (name !== 'new-agent');
+  document.getElementById('panel-agent').hidden = (name !== 'agent');
+}
+
+// --- Detail tabs ---
+
+function showDetailTab(tab) {
+  selectedDetailTab = tab;
+  ['config', 'soul', 'memories'].forEach(t => {
+    document.getElementById('dtab-' + t).classList.toggle('active', t === tab);
+    document.getElementById('detail-' + t).hidden = (t !== tab);
+  });
+
+  if (tab === 'soul' && selectedAgentId) loadSoul(selectedAgentId);
+  if (tab === 'memories' && selectedAgentId) {
+    const agent = agents.find(a => a.id === selectedAgentId);
+    if (agent) {
+      currentMemServerID = agent.server_id;
+      searchMemories();
+    }
+  }
 }
 
 // --- Config tab ---
 
-let configLoaded = false;
-
-function loadConfig() {
-  fetch('/api/config')
-    .then(r => r.text())
-    .then(text => {
-      document.getElementById('config-editor').value = text;
-      configLoaded = true;
-    })
-    .catch(() => setConfigStatus('Failed to load config', true));
-}
-
-function saveConfig() {
-  fetch('/api/config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain' },
-    body: document.getElementById('config-editor').value,
-  })
-    .then(r => {
-      if (r.ok) setConfigStatus('Saved.', false);
-      else r.text().then(t => setConfigStatus(t || 'Save failed', true));
-    })
-    .catch(() => setConfigStatus('Save failed', true));
-}
-
-function setConfigStatus(msg, isError) {
-  const el = document.getElementById('config-status');
-  el.textContent = msg;
-  el.className = 'status-msg' + (isError ? ' error' : '');
-  if (!isError) setTimeout(() => { el.textContent = ''; }, 3000);
-}
-
-// --- Agents tab ---
-
-let editingAgentID = null;
-
-function loadAgents() {
-  fetch('/api/agents')
-    .then(r => r.json())
-    .then(renderAgentList)
-    .catch(() => setAgentsStatus('Failed to load agents', true));
-}
-
-function renderAgentList(agents) {
-  const list = document.getElementById('agents-list');
-  list.innerHTML = '';
-  if (!agents || agents.length === 0) {
-    list.innerHTML = '<p class="empty-msg">No agents configured.</p>';
-    return;
-  }
-  agents.forEach(a => {
-    const row = document.createElement('div');
-    row.className = 'agent-row';
-
-    const info = document.createElement('div');
-    info.className = 'agent-row-info';
-    info.innerHTML =
-      '<strong>' + esc(a.id) + '</strong>' +
-      ' <span class="meta-id">' + esc(a.server_id) + '</span>' +
-      (a.has_token ? ' <span class="badge badge-green">custom token</span>' : '') +
-      (a.soul_file ? ' <span class="meta-id">' + esc(a.soul_file) + '</span>' : '') +
-      (a.response_mode ? ' <span class="badge badge-amber">' + esc(a.response_mode) + '</span>' : '');
-
-    const actions = document.createElement('div');
-    actions.className = 'agent-row-actions';
-
-    const editBtn = document.createElement('button');
-    editBtn.className = 'btn-edit';
-    editBtn.textContent = 'Edit';
-    editBtn.addEventListener('click', () => editAgent(a));
-
-    const delBtn = document.createElement('button');
-    delBtn.className = 'btn-danger';
-    delBtn.textContent = 'Delete';
-    delBtn.addEventListener('click', () => deleteAgent(a.id));
-
-    actions.appendChild(editBtn);
-    actions.appendChild(delBtn);
-    row.appendChild(info);
-    row.appendChild(actions);
-    list.appendChild(row);
-  });
-}
-
-function openNewAgentForm() {
-  editingAgentID = null;
-  document.getElementById('agent-form-title').textContent = 'New Agent';
-  document.getElementById('af-id').value = '';
-  document.getElementById('af-id').disabled = false;
-  document.getElementById('af-server-id').value = '';
-  document.getElementById('af-token').value = '';
-  document.getElementById('af-soul-file').value = '';
-  document.getElementById('af-db-path').value = '';
-  document.getElementById('af-response-mode').value = '';
-  document.getElementById('agent-form-card').hidden = false;
-}
-
-function editAgent(a) {
-  editingAgentID = a.id;
-  document.getElementById('agent-form-title').textContent = 'Edit Agent';
-  document.getElementById('af-id').value = a.id;
-  document.getElementById('af-id').disabled = true;
-  document.getElementById('af-server-id').value = a.server_id;
-  document.getElementById('af-token').value = ''; // never pre-fill token
-  document.getElementById('af-soul-file').value = a.soul_file || '';
-  document.getElementById('af-db-path').value = a.db_path || '';
-  document.getElementById('af-response-mode').value = a.response_mode || '';
-  document.getElementById('agent-form-card').hidden = false;
-}
-
-function closeAgentForm() {
-  document.getElementById('agent-form-card').hidden = true;
-  editingAgentID = null;
-}
-
-function saveAgent() {
-  const id = document.getElementById('af-id').value.trim();
-  const serverID = document.getElementById('af-server-id').value.trim();
-  if (!id) { setAgentsStatus('ID is required', true); return; }
-  if (!serverID) { setAgentsStatus('Server ID is required', true); return; }
+function saveAgentConfig() {
+  if (!selectedAgentId) return;
+  const serverID = document.getElementById('cfg-server-id').value.trim();
+  if (!serverID) { setCfgStatus('Server ID is required', true); return; }
 
   const body = {
-    id: id,
+    id: selectedAgentId,
     server_id: serverID,
-    token: document.getElementById('af-token').value,
-    soul_file: document.getElementById('af-soul-file').value.trim(),
-    db_path: document.getElementById('af-db-path').value.trim(),
-    response_mode: document.getElementById('af-response-mode').value,
+    token: document.getElementById('cfg-token').value,
+    soul_file: document.getElementById('cfg-soul-file').value.trim(),
+    db_path: document.getElementById('cfg-db-path').value.trim(),
+    response_mode: document.getElementById('cfg-response-mode').value,
   };
 
-  const isEdit = editingAgentID !== null;
-  const url = isEdit ? '/api/agents/' + encodeURIComponent(editingAgentID) : '/api/agents';
-  const method = isEdit ? 'PUT' : 'POST';
-
-  fetch(url, {
-    method: method,
+  fetch('/api/agents/' + encodeURIComponent(selectedAgentId), {
+    method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
     .then(r => {
       if (r.ok) {
-        closeAgentForm();
+        setCfgStatus('Saved.', false);
         loadAgents();
-        setAgentsStatus(isEdit ? 'Agent updated.' : 'Agent created.', false);
       } else {
-        r.text().then(t => setAgentsStatus(t || 'Save failed', true));
+        r.text().then(t => setCfgStatus(t || 'Save failed', true));
       }
     })
-    .catch(() => setAgentsStatus('Save failed', true));
+    .catch(() => setCfgStatus('Save failed', true));
 }
 
-function deleteAgent(id) {
-  if (!confirm('Delete agent "' + id + '"? The memory DB will not be deleted.')) return;
-  fetch('/api/agents/' + encodeURIComponent(id), { method: 'DELETE' })
-    .then(r => {
-      if (r.ok) loadAgents();
-      else r.text().then(t => alert('Delete failed: ' + t));
-    })
-    .catch(() => alert('Delete failed.'));
-}
-
-function setAgentsStatus(msg, isError) {
-  const el = document.getElementById('agents-status');
+function setCfgStatus(msg, isError) {
+  const el = document.getElementById('cfg-status');
   el.textContent = msg;
   el.className = 'status-msg' + (isError ? ' error' : '');
   if (!isError) setTimeout(() => { el.textContent = ''; }, 3000);
 }
 
+// --- Soul tab ---
+
+function loadSoul(agentId) {
+  document.getElementById('soul-editor').value = '';
+  document.getElementById('soul-path-info').textContent = 'Loading…';
+  document.getElementById('soul-status').textContent = '';
+
+  fetch('/api/agents/' + encodeURIComponent(agentId) + '/soul')
+    .then(r => r.json())
+    .then(data => {
+      document.getElementById('soul-editor').value = data.content || '';
+      if (data.using_default) {
+        document.getElementById('soul-path-info').textContent = 'No soul file configured — will be auto-created on save.';
+      } else {
+        document.getElementById('soul-path-info').textContent = data.path || '';
+      }
+    })
+    .catch(() => {
+      document.getElementById('soul-path-info').textContent = 'Failed to load soul.';
+    });
+}
+
+function saveSoul() {
+  if (!selectedAgentId) return;
+  const content = document.getElementById('soul-editor').value;
+
+  fetch('/api/agents/' + encodeURIComponent(selectedAgentId) + '/soul', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  })
+    .then(r => {
+      if (r.ok) return r.json();
+      return r.text().then(t => { throw new Error(t || 'Save failed'); });
+    })
+    .then(data => {
+      setSoulStatus('Saved.', false);
+      document.getElementById('soul-path-info').textContent = data.path;
+      loadAgents(); // refresh sidebar in case soul_file was auto-assigned
+    })
+    .catch(e => setSoulStatus(e.message, true));
+}
+
+function setSoulStatus(msg, isError) {
+  const el = document.getElementById('soul-status');
+  el.textContent = msg;
+  el.className = 'status-msg' + (isError ? ' error' : '');
+  if (!isError) setTimeout(() => { el.textContent = ''; }, 3000);
+}
+
+// --- New agent ---
+
+function openNewAgent() {
+  selectedAgentId = null;
+  selectedDetailTab = 'config';
+  renderAgentSidebar();
+  showPanel('new-agent');
+  document.getElementById('na-id').value = '';
+  document.getElementById('na-server-id').value = '';
+  document.getElementById('na-token').value = '';
+  document.getElementById('na-soul-file').value = '';
+  document.getElementById('na-db-path').value = '';
+  document.getElementById('na-response-mode').value = '';
+  document.getElementById('new-agent-status').textContent = '';
+}
+
+function cancelNewAgent() {
+  showPanel('empty');
+}
+
+function createAgent() {
+  const id = document.getElementById('na-id').value.trim();
+  const serverID = document.getElementById('na-server-id').value.trim();
+  if (!id) { setNewAgentStatus('ID is required', true); return; }
+  if (!serverID) { setNewAgentStatus('Server ID is required', true); return; }
+
+  const body = {
+    id,
+    server_id: serverID,
+    token: document.getElementById('na-token').value,
+    soul_file: document.getElementById('na-soul-file').value.trim(),
+    db_path: document.getElementById('na-db-path').value.trim(),
+    response_mode: document.getElementById('na-response-mode').value,
+  };
+
+  fetch('/api/agents', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+    .then(r => {
+      if (r.ok) {
+        loadAgents().then(() => selectAgent(id));
+      } else {
+        r.text().then(t => setNewAgentStatus(t || 'Create failed', true));
+      }
+    })
+    .catch(() => setNewAgentStatus('Create failed', true));
+}
+
+function setNewAgentStatus(msg, isError) {
+  const el = document.getElementById('new-agent-status');
+  el.textContent = msg;
+  el.className = 'status-msg' + (isError ? ' error' : '');
+}
+
+function deleteSelectedAgent() {
+  if (!selectedAgentId) return;
+  if (!confirm('Delete agent "' + selectedAgentId + '"? The memory DB will not be deleted.')) return;
+
+  fetch('/api/agents/' + encodeURIComponent(selectedAgentId), { method: 'DELETE' })
+    .then(r => {
+      if (r.ok) {
+        selectedAgentId = null;
+        loadAgents();
+        showPanel('empty');
+      } else {
+        r.text().then(t => alert('Delete failed: ' + t));
+      }
+    })
+    .catch(() => alert('Delete failed.'));
+}
+
 // --- Memories tab ---
 
-function loadMemories() {
-  const serverID = document.getElementById('mem-server').value.trim();
+function searchMemories() {
+  if (!currentMemServerID) return;
   const statusEl = document.getElementById('mem-status');
-  if (!serverID) {
-    statusEl.textContent = 'Server ID is required.';
-    statusEl.className = 'status-msg error';
-    return;
-  }
   statusEl.textContent = '';
-  statusEl.className = 'status-msg';
 
   const userID = document.getElementById('mem-user').value.trim();
   const q = document.getElementById('mem-query').value.trim();
-  const params = new URLSearchParams({ server_id: serverID, limit: 25, offset: 0 });
+  const params = new URLSearchParams({ server_id: currentMemServerID, limit: 25, offset: 0 });
   if (userID) params.set('user_id', userID);
   if (q) params.set('q', q);
 
   fetch('/api/memories?' + params)
     .then(r => r.json())
-    .then(data => renderMemories(data, serverID))
+    .then(data => renderMemories(data, currentMemServerID))
     .catch(() => {
       statusEl.textContent = 'Failed to load memories.';
       statusEl.className = 'status-msg error';
@@ -243,35 +303,8 @@ function renderMemories(data, serverID) {
 function deleteMemory(id, serverID) {
   if (!confirm('Delete this memory?')) return;
   fetch('/api/memories/' + encodeURIComponent(id) + '?server_id=' + encodeURIComponent(serverID), { method: 'DELETE' })
-    .then(r => { if (r.ok) loadMemories(); else r.text().then(t => alert('Delete failed: ' + t)); })
+    .then(r => { if (r.ok) searchMemories(); else r.text().then(t => alert('Delete failed: ' + t)); })
     .catch(() => alert('Delete failed.'));
-}
-
-// populate agent dropdown for memories tab
-function loadAgentList() {
-  fetch('/api/agents')
-    .then(r => r.json())
-    .then(agents => {
-      const sel = document.getElementById('mem-agent-select');
-      // keep the first "— select agent —" option
-      sel.options.length = 1;
-      (agents || []).forEach(a => {
-        const opt = document.createElement('option');
-        opt.value = a.server_id;
-        opt.textContent = a.id + ' (' + a.server_id + ')';
-        sel.appendChild(opt);
-      });
-    })
-    .catch(() => {
-      const sel = document.getElementById('mem-agent-select');
-      if (sel) sel.options.length = 1; // reset to just the placeholder
-    });
-}
-
-function onMemAgentChange() {
-  const sel = document.getElementById('mem-agent-select');
-  const serverInput = document.getElementById('mem-server');
-  serverInput.value = sel.value; // clears when placeholder (value='') is selected
 }
 
 // --- Edit modal ---
@@ -301,13 +334,20 @@ function confirmEdit() {
     body: JSON.stringify({ content: newContent }),
   })
     .then(r => {
-      if (r.ok) { closeEditModal(); loadMemories(); }
+      if (r.ok) { closeEditModal(); searchMemories(); }
       else r.text().then(t => alert('Edit failed: ' + t));
     })
     .catch(() => alert('Edit failed.'));
 }
 
-// --- Monitor tab (SSE) ---
+// --- Monitor ---
+
+function toggleMonitor() {
+  const overlay = document.getElementById('monitor-overlay');
+  overlay.hidden = !overlay.hidden;
+}
+
+// --- SSE ---
 
 let sseConn = null;
 
@@ -316,25 +356,20 @@ function connectSSE() {
   sseConn = new EventSource('/api/events');
 
   sseConn.addEventListener('status', e => {
-    try {
-      const agents = JSON.parse(e.data);
-      renderAgents(agents);
-    } catch (_) {}
+    try { renderMonitorAgents(JSON.parse(e.data)); } catch (_) {}
   });
 
   sseConn.addEventListener('config_reloaded', () => {
-    setConfigStatus('Config reloaded!', false);
-    configLoaded = false;
+    const prevSelected = selectedAgentId;
+    loadAgents().then(() => {
+      if (prevSelected && agents.find(a => a.id === prevSelected)) {
+        selectAgent(prevSelected);
+      }
+    });
   });
 
-  sseConn.onerror = () => {
-    setSseStatus(false);
-    document.getElementById('monitor-status').textContent = 'Reconnecting…';
-  };
-
-  sseConn.onopen = () => {
-    setSseStatus(true);
-  };
+  sseConn.onerror = () => setSseStatus(false);
+  sseConn.onopen = () => setSseStatus(true);
 }
 
 function setSseStatus(connected) {
@@ -349,21 +384,22 @@ function setSseStatus(connected) {
   }
 }
 
-function renderAgents(agents) {
+function renderMonitorAgents(agentStatuses) {
   const grid = document.getElementById('agent-grid');
   const statusEl = document.getElementById('monitor-status');
   const dot = document.getElementById('agent-count-dot');
   grid.innerHTML = '';
 
-  if (!agents || agents.length === 0) {
+  if (!agentStatuses || agentStatuses.length === 0) {
     statusEl.textContent = 'No active agents.';
     dot.className = 'status-dot';
     return;
   }
-  statusEl.textContent = agents.length + ' active agent' + (agents.length !== 1 ? 's' : '');
+
+  statusEl.textContent = agentStatuses.length + ' active agent' + (agentStatuses.length !== 1 ? 's' : '');
   dot.className = 'status-dot active';
 
-  agents.forEach(a => {
+  agentStatuses.forEach(a => {
     const last = a.last_active ? new Date(a.last_active).toLocaleString() : '—';
     const qd = a.queue_depth || 0;
     const badgeClass = qd === 0 ? 'badge badge-green' : qd <= 2 ? 'badge badge-amber' : 'badge badge-red';
@@ -393,7 +429,7 @@ function esc(str) {
     .replace(/"/g, '&quot;');
 }
 
-// --- Init ---
+// --- Boot ---
 
-showView('config');
-connectSSE();
+showPanel('empty');
+init();

@@ -10,7 +10,9 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,6 +54,8 @@ func New(addr string, cfgStore *config.Store, cfgPath string, router *agent.Rout
 	mux.HandleFunc("POST /api/agents", s.handleCreateAgent)
 	mux.HandleFunc("PUT /api/agents/{id}", s.handleUpdateAgent)
 	mux.HandleFunc("DELETE /api/agents/{id}", s.handleDeleteAgent)
+	mux.HandleFunc("GET /api/agents/{id}/soul", s.handleGetAgentSoul)
+	mux.HandleFunc("PUT /api/agents/{id}/soul", s.handlePutAgentSoul)
 	mux.HandleFunc("/", http.FileServer(http.FS(staticFiles)).ServeHTTP)
 
 	s.httpServer = &http.Server{
@@ -428,6 +432,123 @@ func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 
 	s.router.UnloadAgent(deletedServerID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleGetAgentSoul(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	cfg := s.cfgStore.Get()
+	var found *config.AgentConfig
+	for i := range cfg.Agents {
+		if cfg.Agents[i].ID == id {
+			found = &cfg.Agents[i]
+			break
+		}
+	}
+	if found == nil {
+		http.Error(w, "agent not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if found.SoulFile == "" {
+		json.NewEncoder(w).Encode(map[string]any{
+			"content":       "",
+			"path":          "",
+			"using_default": true,
+		})
+		return
+	}
+
+	expanded := expandServerPath(found.SoulFile)
+	data, err := os.ReadFile(expanded)
+	if err != nil {
+		if os.IsNotExist(err) {
+			json.NewEncoder(w).Encode(map[string]any{
+				"content": "",
+				"path":    expanded,
+			})
+			return
+		}
+		slog.Error("read soul file", "error", err)
+		http.Error(w, "failed to read soul file", http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{
+		"content": string(data),
+		"path":    expanded,
+	})
+}
+
+func (s *Server) handlePutAgentSoul(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	cfg := s.cfgStore.Get()
+	agentIdx := -1
+	for i, a := range cfg.Agents {
+		if a.ID == id {
+			agentIdx = i
+			break
+		}
+	}
+	if agentIdx == -1 {
+		http.Error(w, "agent not found", http.StatusNotFound)
+		return
+	}
+
+	agent := cfg.Agents[agentIdx]
+	var soulPath string
+	needsConfigUpdate := false
+
+	if agent.SoulFile == "" {
+		soulPath = filepath.Join(filepath.Dir(s.cfgPath), "souls", id+".md")
+		needsConfigUpdate = true
+	} else {
+		soulPath = expandServerPath(agent.SoulFile)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(soulPath), 0o755); err != nil {
+		slog.Error("create soul dir", "error", err)
+		http.Error(w, "failed to create directory", http.StatusInternalServerError)
+		return
+	}
+	if err := os.WriteFile(soulPath, []byte(body.Content), 0o644); err != nil {
+		slog.Error("write soul file", "error", err)
+		http.Error(w, "failed to write soul file", http.StatusInternalServerError)
+		return
+	}
+
+	if needsConfigUpdate {
+		newAgents := make([]config.AgentConfig, len(cfg.Agents))
+		copy(newAgents, cfg.Agents)
+		newAgents[agentIdx].SoulFile = soulPath
+		if err := s.writeAgents(newAgents); err != nil {
+			slog.Error("write agents config", "error", err)
+			http.Error(w, "failed to update config", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"path": soulPath})
+}
+
+func expandServerPath(path string) string {
+	path = os.ExpandEnv(path)
+	if strings.HasPrefix(path, "~/") {
+		home, _ := os.UserHomeDir()
+		path = filepath.Join(home, path[2:])
+	}
+	return path
 }
 
 // writeAgents replaces the [[agents]] section in the config file and reloads.
