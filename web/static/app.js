@@ -69,18 +69,33 @@ function renderAgentList(agents) {
   agents.forEach(a => {
     const row = document.createElement('div');
     row.className = 'agent-row';
-    row.innerHTML =
-      '<div class="agent-row-info">' +
-        '<strong>' + esc(a.id) + '</strong>' +
-        ' <span class="meta-id">' + esc(a.server_id) + '</span>' +
-        (a.has_token ? ' <span class="badge badge-green">custom token</span>' : '') +
-        (a.soul_file ? ' <span class="meta-id">' + esc(a.soul_file) + '</span>' : '') +
-        (a.response_mode ? ' <span class="badge badge-amber">' + esc(a.response_mode) + '</span>' : '') +
-      '</div>' +
-      '<div class="agent-row-actions">' +
-        '<button class="btn-edit" onclick="editAgent(' + JSON.stringify(a) + ')">Edit</button>' +
-        '<button class="btn-danger" onclick="deleteAgent(' + JSON.stringify(a.id) + ')">Delete</button>' +
-      '</div>';
+
+    const info = document.createElement('div');
+    info.className = 'agent-row-info';
+    info.innerHTML =
+      '<strong>' + esc(a.id) + '</strong>' +
+      ' <span class="meta-id">' + esc(a.server_id) + '</span>' +
+      (a.has_token ? ' <span class="badge badge-green">custom token</span>' : '') +
+      (a.soul_file ? ' <span class="meta-id">' + esc(a.soul_file) + '</span>' : '') +
+      (a.response_mode ? ' <span class="badge badge-amber">' + esc(a.response_mode) + '</span>' : '');
+
+    const actions = document.createElement('div');
+    actions.className = 'agent-row-actions';
+
+    const editBtn = document.createElement('button');
+    editBtn.className = 'btn-edit';
+    editBtn.textContent = 'Edit';
+    editBtn.addEventListener('click', () => editAgent(a));
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn-danger';
+    delBtn.textContent = 'Delete';
+    delBtn.addEventListener('click', () => deleteAgent(a.id));
+
+    actions.appendChild(editBtn);
+    actions.appendChild(delBtn);
+    row.appendChild(info);
+    row.appendChild(actions);
     list.appendChild(row);
   });
 }
@@ -247,15 +262,16 @@ function loadAgentList() {
         sel.appendChild(opt);
       });
     })
-    .catch(() => {});
+    .catch(() => {
+      const sel = document.getElementById('mem-agent-select');
+      if (sel) sel.options.length = 1; // reset to just the placeholder
+    });
 }
 
 function onMemAgentChange() {
   const sel = document.getElementById('mem-agent-select');
   const serverInput = document.getElementById('mem-server');
-  if (sel.value) {
-    serverInput.value = sel.value;
-  }
+  serverInput.value = sel.value; // clears when placeholder (value='') is selected
 }
 
 // --- Edit modal ---
