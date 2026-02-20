@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strings"
 	"unicode/utf8"
 
@@ -269,7 +268,7 @@ func (t *reactTool) Call(ctx context.Context, args json.RawMessage) (string, err
 
 // NewDefaultRegistry creates a registry with standard tools.
 // send and react are injected per-turn callbacks.
-// If webSearchKey is empty, web_search is not registered.
+// web_search not implemented for MVP.
 func NewDefaultRegistry(store *memory.Store, serverID string, send SendFunc, react ReactFunc, webSearchKey string) *Registry {
 	r := NewRegistry()
 	r.Register(&memorySaveTool{store: store, serverID: serverID})
@@ -277,8 +276,7 @@ func NewDefaultRegistry(store *memory.Store, serverID string, send SendFunc, rea
 	r.Register(&memoryForgetTool{store: store})
 	r.Register(&replyTool{send: send})
 	r.Register(&reactTool{react: react})
-	if webSearchKey != "" {
-		slog.Warn("web_search tool not yet implemented, skipping registration")
-	}
+	// web_search not implemented for MVP
+	_ = webSearchKey
 	return r
 }
