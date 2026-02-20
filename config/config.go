@@ -26,12 +26,12 @@ type WebConfig struct {
 }
 
 type BotConfig struct {
-	Token    string `toml:"token"`
+	Token    string `toml:"token" json:"-"`
 	SoulFile string `toml:"soul_file"`
 }
 
 type LLMConfig struct {
-	OpenRouterKey         string `toml:"openrouter_key"`
+	OpenRouterKey         string `toml:"openrouter_key" json:"-"`
 	Model                 string `toml:"model"`
 	EmbeddingModel        string `toml:"embedding_model"`
 	RequestTimeoutSeconds int    `toml:"request_timeout_seconds"`
@@ -52,7 +52,7 @@ type ResponseConfig struct {
 }
 
 type ToolsConfig struct {
-	WebSearchKey string `toml:"web_search_key"`
+	WebSearchKey string `toml:"web_search_key" json:"-"`
 }
 
 type ServerConfig struct {

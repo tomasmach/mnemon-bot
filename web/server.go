@@ -8,15 +8,14 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 	"time"
 
-	"github.com/BurntSushi/toml"
 	"github.com/tomasmach/mnemon-bot/agent"
 	"github.com/tomasmach/mnemon-bot/config"
 	"github.com/tomasmach/mnemon-bot/memory"
-	"os"
 )
 
 //go:embed static
@@ -135,21 +134,28 @@ func (s *Server) handlePostConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var tmp config.Config
-	if _, err := toml.Decode(string(body), &tmp); err != nil {
-		http.Error(w, fmt.Sprintf("invalid TOML: %v", err), http.StatusBadRequest)
+	// Write to temp file and fully validate (including required fields) before touching the real config.
+	tmpPath := s.cfgPath + ".tmp"
+	if err := os.WriteFile(tmpPath, body, 0o644); err != nil {
+		slog.Error("write temp config", "error", err)
+		http.Error(w, "failed to write config", http.StatusInternalServerError)
 		return
 	}
-
-	if err := os.WriteFile(s.cfgPath, body, 0o644); err != nil {
-		slog.Error("write config file", "error", err)
+	if _, err := config.Load(tmpPath); err != nil {
+		os.Remove(tmpPath)
+		http.Error(w, fmt.Sprintf("invalid config: %v", err), http.StatusBadRequest)
+		return
+	}
+	if err := os.Rename(tmpPath, s.cfgPath); err != nil {
+		os.Remove(tmpPath)
+		slog.Error("rename config file", "error", err)
 		http.Error(w, "failed to write config", http.StatusInternalServerError)
 		return
 	}
 
 	if _, err := s.cfgStore.Reload(); err != nil {
 		slog.Error("reload config", "error", err)
-		http.Error(w, fmt.Sprintf("config written but reload failed: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("reload failed: %v", err), http.StatusInternalServerError)
 		return
 	}
 
