@@ -17,11 +17,11 @@ You have access to memory tools to save and recall information. Use them proacti
 
 // Load returns the soul/system prompt for the given server.
 // Resolution order:
-// 1. Server-specific soul file (from cfg.Servers match on serverID)
+// 1. Agent-specific soul file (from cfg.Agents match on serverID)
 // 2. Global soul file (cfg.Bot.SoulFile)
 // 3. Built-in default constant
 func Load(cfg *config.Config, serverID string) string {
-	// 1. Server-specific soul file
+	// 1. Agent-specific soul file
 	for _, a := range cfg.Agents {
 		if a.ServerID == serverID && a.SoulFile != "" {
 			if content := readFile(a.SoulFile); content != "" {
