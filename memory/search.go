@@ -13,6 +13,7 @@ type MemoryRow struct {
 	ID         string
 	Content    string
 	Importance float64
+	ServerID   string
 	UserID     string
 	ChannelID  string
 	CreatedAt  time.Time

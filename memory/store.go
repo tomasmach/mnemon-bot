@@ -118,6 +118,70 @@ func (s *Store) Forget(ctx context.Context, serverID, memoryID string) error {
 	return err
 }
 
+type ListOptions struct {
+	ServerID string
+	UserID   string
+	Limit    int
+	Offset   int
+	Query    string
+}
+
+func (s *Store) List(ctx context.Context, opts ListOptions) ([]MemoryRow, int, error) {
+	if opts.ServerID == "" {
+		return nil, 0, fmt.Errorf("ServerID is required")
+	}
+	if opts.Limit == 0 {
+		opts.Limit = 50
+	}
+
+	where := "server_id = ? AND forgotten = 0"
+	args := []any{opts.ServerID}
+
+	if opts.UserID != "" {
+		where += " AND user_id = ?"
+		args = append(args, opts.UserID)
+	}
+	if opts.Query != "" {
+		escaped := strings.ReplaceAll(opts.Query, `\`, `\\`)
+		escaped = strings.ReplaceAll(escaped, `%`, `\%`)
+		escaped = strings.ReplaceAll(escaped, `_`, `\_`)
+		where += ` AND content LIKE ? ESCAPE '\'`
+		args = append(args, "%"+escaped+"%")
+	}
+
+	var total int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM memories WHERE "+where, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count memories: %w", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT id, content, importance, server_id, COALESCE(user_id, ''), COALESCE(channel_id, ''), created_at FROM memories WHERE "+where+" ORDER BY created_at DESC LIMIT ? OFFSET ?",
+		append(args, opts.Limit, opts.Offset)...,
+	)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list memories: %w", err)
+	}
+	defer rows.Close()
+
+	var out []MemoryRow
+	for rows.Next() {
+		var row MemoryRow
+		if err := rows.Scan(&row.ID, &row.Content, &row.Importance, &row.ServerID, &row.UserID, &row.ChannelID, &row.CreatedAt); err != nil {
+			return nil, 0, fmt.Errorf("scan memory: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, total, rows.Err()
+}
+
+func (s *Store) UpdateContent(ctx context.Context, id, serverID, content string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE memories SET content = ?, updated_at = ? WHERE id = ? AND server_id = ? AND forgotten = 0`,
+		content, time.Now().UTC(), id, serverID,
+	)
+	return err
+}
+
 func (s *Store) allEmbeddings(ctx context.Context, serverID string) (map[string][]float32, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT e.memory_id, e.vector FROM embeddings e
