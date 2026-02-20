@@ -318,6 +318,8 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(views)
 }
 
+// Note: agent changes take effect on next restart — the live router is not hot-reloaded.
+// Agents with custom tokens always require a restart regardless.
 func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	var input config.AgentConfig
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -356,6 +358,8 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
+// Note: agent changes take effect on next restart — the live router is not hot-reloaded.
+// Agents with custom tokens always require a restart regardless.
 func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var input config.AgentConfig
@@ -373,6 +377,9 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	found := false
 	for i, a := range newAgents {
 		if a.ID == id {
+			if input.Token == "" {
+				input.Token = a.Token // preserve existing token if not updated
+			}
 			input.ID = id // ensure ID unchanged
 			newAgents[i] = input
 			found = true
@@ -392,6 +399,8 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// Note: agent changes take effect on next restart — the live router is not hot-reloaded.
+// Agents with custom tokens always require a restart regardless.
 func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
@@ -435,6 +444,12 @@ func (s *Server) writeAgents(agents []config.AgentConfig) error {
 	}
 
 	// Replace agents section — convert via JSON round-trip
+	// Build token map before marshaling — Token has json:"-" so Marshal drops it
+	tokenByID := make(map[string]string, len(agents))
+	for _, a := range agents {
+		tokenByID[a.ID] = a.Token
+	}
+
 	agentsJSON, err := json.Marshal(agents)
 	if err != nil {
 		return err
@@ -442,6 +457,15 @@ func (s *Server) writeAgents(agents []config.AgentConfig) error {
 	var agentsRaw []any
 	if err := json.Unmarshal(agentsJSON, &agentsRaw); err != nil {
 		return err
+	}
+	// Restore tokens dropped by json:"-"
+	for _, item := range agentsRaw {
+		if m, ok := item.(map[string]any); ok {
+			id, _ := m["id"].(string)
+			if tok := tokenByID[id]; tok != "" {
+				m["token"] = tok
+			}
+		}
 	}
 	if len(agentsRaw) == 0 {
 		delete(raw, "agents")

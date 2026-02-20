@@ -2,6 +2,7 @@
 package soul
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,7 @@ func Load(cfg *config.Config, serverID string) string {
 			if content := readFile(a.SoulFile); content != "" {
 				return content
 			}
+			slog.Warn("configured soul file not readable, falling back", "path", a.SoulFile, "server_id", serverID)
 			break
 		}
 	}
@@ -36,6 +38,7 @@ func Load(cfg *config.Config, serverID string) string {
 		if content := readFile(cfg.Bot.SoulFile); content != "" {
 			return content
 		}
+		slog.Warn("configured global soul file not readable, falling back", "path", cfg.Bot.SoulFile)
 	}
 
 	// 3. Built-in default
