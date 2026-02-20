@@ -1,0 +1,79 @@
+package agent
+
+import (
+	"context"
+	"log/slog"
+	"sync"
+
+	"github.com/bwmarrin/discordgo"
+	"github.com/tomasmach/mnemon-bot/config"
+	"github.com/tomasmach/mnemon-bot/llm"
+	"github.com/tomasmach/mnemon-bot/memory"
+)
+
+// Router manages per-channel ChannelAgents.
+type Router struct {
+	mu      sync.Mutex
+	agents  map[string]*ChannelAgent // keyed by channelID
+	ctx     context.Context
+	cfg     *config.Config
+	llm     *llm.Client
+	mem     *memory.Store
+	session *discordgo.Session
+	wg      sync.WaitGroup
+}
+
+// NewRouter creates a new Router.
+func NewRouter(ctx context.Context, cfg *config.Config, llmClient *llm.Client, mem *memory.Store, session *discordgo.Session) *Router {
+	return &Router{
+		agents:  make(map[string]*ChannelAgent),
+		ctx:     ctx,
+		cfg:     cfg,
+		llm:     llmClient,
+		mem:     mem,
+		session: session,
+	}
+}
+
+// Route delivers a message to the appropriate channel agent, spawning one if needed.
+func (r *Router) Route(msg *discordgo.MessageCreate) {
+	channelID := msg.ChannelID
+	serverID := msg.GuildID
+	if serverID == "" {
+		serverID = "DM:" + msg.Author.ID
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if agent, ok := r.agents[channelID]; ok {
+		select {
+		case agent.msgCh <- msg:
+			return
+		default:
+			// buffer full or agent gone — respawn
+			slog.Warn("agent buffer full or gone, respawning", "channel_id", channelID)
+			delete(r.agents, channelID)
+		}
+	}
+
+	// spawn new agent
+	a := newChannelAgent(channelID, serverID, r.cfg, r.llm, r.mem, r.session)
+	r.agents[channelID] = a
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		a.run(r.ctx)
+		r.mu.Lock()
+		if r.agents[channelID] == a {
+			delete(r.agents, channelID)
+		}
+		r.mu.Unlock()
+	}()
+	a.msgCh <- msg // guaranteed to succeed (buffer just created, size 100)
+}
+
+// WaitForDrain waits for all active agents to finish (up to the context deadline).
+func (r *Router) WaitForDrain() {
+	r.wg.Wait()
+}
