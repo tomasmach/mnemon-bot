@@ -78,8 +78,8 @@ func main() {
 	<-sigCh
 
 	slog.Info("shutting down")
-	cancel()
 	b.Stop()
+	cancel()
 	router.WaitForDrain()
 	slog.Info("shutdown complete")
 }
