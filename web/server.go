@@ -29,6 +29,7 @@ type Server struct {
 	router     *agent.Router
 	sseSubs    []chan string
 	ssesMu     sync.Mutex
+	writeMu    sync.Mutex  // guards config file writes
 	httpServer *http.Server
 }
 
@@ -167,16 +168,25 @@ func (s *Server) handlePostConfig(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) handleListMemories(w http.ResponseWriter, r *http.Request) {
+// memoryForRequest extracts the server_id query param and looks up the memory store.
+// Returns nil, "", false and writes the appropriate HTTP error if not found.
+func (s *Server) memoryForRequest(w http.ResponseWriter, r *http.Request) (*memory.Store, string, bool) {
 	serverID := r.URL.Query().Get("server_id")
 	if serverID == "" {
 		http.Error(w, "server_id is required", http.StatusBadRequest)
-		return
+		return nil, "", false
 	}
-
 	mem := s.router.MemoryForServer(serverID)
 	if mem == nil {
 		http.Error(w, "server not configured", http.StatusNotFound)
+		return nil, "", false
+	}
+	return mem, serverID, true
+}
+
+func (s *Server) handleListMemories(w http.ResponseWriter, r *http.Request) {
+	mem, serverID, ok := s.memoryForRequest(w, r)
+	if !ok {
 		return
 	}
 
@@ -211,15 +221,8 @@ func (s *Server) handleListMemories(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteMemory(w http.ResponseWriter, r *http.Request) {
-	serverID := r.URL.Query().Get("server_id")
-	if serverID == "" {
-		http.Error(w, "server_id is required", http.StatusBadRequest)
-		return
-	}
-
-	mem := s.router.MemoryForServer(serverID)
-	if mem == nil {
-		http.Error(w, "server not configured", http.StatusNotFound)
+	mem, serverID, ok := s.memoryForRequest(w, r)
+	if !ok {
 		return
 	}
 
@@ -233,15 +236,8 @@ func (s *Server) handleDeleteMemory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePatchMemory(w http.ResponseWriter, r *http.Request) {
-	serverID := r.URL.Query().Get("server_id")
-	if serverID == "" {
-		http.Error(w, "server_id is required", http.StatusBadRequest)
-		return
-	}
-
-	mem := s.router.MemoryForServer(serverID)
-	if mem == nil {
-		http.Error(w, "server not configured", http.StatusNotFound)
+	mem, serverID, ok := s.memoryForRequest(w, r)
+	if !ok {
 		return
 	}
 
@@ -337,6 +333,9 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	cfg := s.cfgStore.Get()
 	for _, a := range cfg.Agents {
 		if a.ID == input.ID {
@@ -345,7 +344,9 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	newAgents := append(cfg.Agents, input)
+	newAgents := make([]config.AgentConfig, len(cfg.Agents)+1)
+	copy(newAgents, cfg.Agents)
+	newAgents[len(cfg.Agents)] = input
 	if err := s.writeAgents(newAgents); err != nil {
 		slog.Error("write agents", "error", err)
 		http.Error(w, "failed to save agent", http.StatusInternalServerError)
@@ -362,6 +363,9 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 
 	cfg := s.cfgStore.Get()
 	newAgents := make([]config.AgentConfig, len(cfg.Agents))
@@ -390,6 +394,9 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 
 	cfg := s.cfgStore.Get()
 	newAgents := make([]config.AgentConfig, 0, len(cfg.Agents))
