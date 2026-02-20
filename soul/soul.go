@@ -22,9 +22,9 @@ You have access to memory tools to save and recall information. Use them proacti
 // 3. Built-in default constant
 func Load(cfg *config.Config, serverID string) string {
 	// 1. Server-specific soul file
-	for _, s := range cfg.Servers {
-		if s.ID == serverID && s.SoulFile != "" {
-			if content := readFile(s.SoulFile); content != "" {
+	for _, a := range cfg.Agents {
+		if a.ServerID == serverID && a.SoulFile != "" {
+			if content := readFile(a.SoulFile); content != "" {
 				return content
 			}
 			break
