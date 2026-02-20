@@ -65,8 +65,6 @@ type SendFunc func(content string) error
 // ReactFunc adds an emoji reaction to the triggering message.
 type ReactFunc func(emoji string) error
 
-// memorySaveTool
-
 type memorySaveTool struct {
 	store    *memory.Store
 	serverID string
@@ -105,8 +103,6 @@ func (t *memorySaveTool) Call(ctx context.Context, args json.RawMessage) (string
 	}
 	return fmt.Sprintf("Memory saved (id: %s)", id), nil
 }
-
-// memoryRecallTool
 
 type memoryRecallTool struct {
 	store    *memory.Store
@@ -152,8 +148,6 @@ func (t *memoryRecallTool) Call(ctx context.Context, args json.RawMessage) (stri
 	return sb.String(), nil
 }
 
-// memoryForgetTool
-
 type memoryForgetTool struct {
 	store *memory.Store
 }
@@ -183,8 +177,6 @@ func (t *memoryForgetTool) Call(ctx context.Context, args json.RawMessage) (stri
 	}
 	return "Memory forgotten.", nil
 }
-
-// replyTool
 
 type replyTool struct {
 	send SendFunc
@@ -237,8 +229,6 @@ func splitMessage(s string, limit int) []string {
 	return parts
 }
 
-// reactTool
-
 type reactTool struct {
 	react ReactFunc
 }
@@ -267,16 +257,12 @@ func (t *reactTool) Call(ctx context.Context, args json.RawMessage) (string, err
 }
 
 // NewDefaultRegistry creates a registry with standard tools.
-// send and react are injected per-turn callbacks.
-// web_search not implemented for MVP.
-func NewDefaultRegistry(store *memory.Store, serverID string, send SendFunc, react ReactFunc, webSearchKey string) *Registry {
+func NewDefaultRegistry(store *memory.Store, serverID string, send SendFunc, react ReactFunc) *Registry {
 	r := NewRegistry()
 	r.Register(&memorySaveTool{store: store, serverID: serverID})
 	r.Register(&memoryRecallTool{store: store, serverID: serverID})
 	r.Register(&memoryForgetTool{store: store})
 	r.Register(&replyTool{send: send})
 	r.Register(&reactTool{react: react})
-	// web_search not implemented for MVP
-	_ = webSearchKey
 	return r
 }

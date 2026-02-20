@@ -23,7 +23,6 @@ func main() {
 
 	setupLogger(*logLevel, *logFormat)
 
-	// Config path: --config flag > MNEMON_CONFIG env > default
 	cfgPath := config.Resolve()
 	if *configPath != "" {
 		cfgPath = *configPath
@@ -49,21 +48,16 @@ func main() {
 	}
 	slog.Info("memory store opened")
 
-	// Create bot first to get the Discord session.
 	b, err := bot.New(cfg.Bot.Token)
 	if err != nil {
 		slog.Error("failed to create bot", "error", err)
 		os.Exit(1)
 	}
 
-	// Create root context.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Create router with the session from bot.
 	router := agent.NewRouter(ctx, cfg, llmClient, mem, b.Session())
-
-	// Wire router into bot before opening the gateway.
 	b.SetRouter(router)
 
 	if err := b.Start(); err != nil {
@@ -72,7 +66,6 @@ func main() {
 	}
 	slog.Info("bot started")
 
-	// Block until SIGTERM or SIGINT.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	<-sigCh

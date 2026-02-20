@@ -52,15 +52,10 @@ func expandPath(path string) string {
 	return path
 }
 
-// readFile expands env vars and ~, resolves to absolute path, and reads the file.
+// readFile expands env vars and ~, then reads the file.
 // Returns empty string on any error.
 func readFile(path string) string {
-	path = expandPath(path)
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return ""
-	}
-	data, err := os.ReadFile(abs)
+	data, err := os.ReadFile(expandPath(path))
 	if err != nil {
 		return ""
 	}

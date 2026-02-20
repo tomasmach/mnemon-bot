@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"time"
@@ -73,63 +74,20 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 		body["tools"] = tools
 	}
 
-	delays := []time.Duration{500 * time.Millisecond, 1000 * time.Millisecond}
-	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		if attempt > 0 {
-			delay := delays[attempt-1]
-			select {
-			case <-time.After(delay):
-			case <-ctx.Done():
-				return Choice{}, ctx.Err()
-			}
-		}
-
-		data, err := json.Marshal(body)
-		if err != nil {
-			return Choice{}, fmt.Errorf("marshal request: %w", err)
-		}
-
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://openrouter.ai/api/v1/chat/completions", bytes.NewReader(data))
-		if err != nil {
-			return Choice{}, fmt.Errorf("build request: %w", err)
-		}
-		req.Header.Set("Authorization", "Bearer "+c.cfg.OpenRouterKey)
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("HTTP-Referer", "https://github.com/tomasmach/mnemon-bot")
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			if isTransient(0, err) {
-				lastErr = err
-				continue
-			}
-			return Choice{}, err
-		}
-
-		if isTransient(resp.StatusCode, nil) {
-			resp.Body.Close()
-			lastErr = fmt.Errorf("transient HTTP %d", resp.StatusCode)
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			return Choice{}, fmt.Errorf("HTTP %d", resp.StatusCode)
-		}
-
-		var result ChatResponse
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			resp.Body.Close()
-			return Choice{}, fmt.Errorf("decode response: %w", err)
-		}
-		resp.Body.Close()
-
-		if len(result.Choices) == 0 {
-			return Choice{}, fmt.Errorf("no choices in response")
-		}
-		return result.Choices[0], nil
+	respBody, err := c.post(ctx, "https://openrouter.ai/api/v1/chat/completions", body)
+	if err != nil {
+		return Choice{}, err
 	}
-	return Choice{}, lastErr
+	defer respBody.Close()
+
+	var result ChatResponse
+	if err := json.NewDecoder(respBody).Decode(&result); err != nil {
+		return Choice{}, fmt.Errorf("decode response: %w", err)
+	}
+	if len(result.Choices) == 0 {
+		return Choice{}, fmt.Errorf("no choices in response")
+	}
+	return result.Choices[0], nil
 }
 
 func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
@@ -138,24 +96,47 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 		"input": text,
 	}
 
-	delays := []time.Duration{500 * time.Millisecond, 1000 * time.Millisecond}
+	respBody, err := c.post(ctx, "https://openrouter.ai/api/v1/embeddings", body)
+	if err != nil {
+		return nil, err
+	}
+	defer respBody.Close()
+
+	var result struct {
+		Data []struct {
+			Embedding []float32 `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(respBody).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	if len(result.Data) == 0 {
+		return nil, fmt.Errorf("no embedding data in response")
+	}
+	return result.Data[0].Embedding, nil
+}
+
+var retryDelays = []time.Duration{500 * time.Millisecond, 1000 * time.Millisecond}
+
+// post sends a JSON POST request to the given URL with retry on transient errors.
+// Returns the response body on success; the caller must close it.
+func (c *Client) post(ctx context.Context, url string, body any) (io.ReadCloser, error) {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
-			delay := delays[attempt-1]
 			select {
-			case <-time.After(delay):
+			case <-time.After(retryDelays[attempt-1]):
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
 		}
 
-		data, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("marshal request: %w", err)
-		}
-
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://openrouter.ai/api/v1/embeddings", bytes.NewReader(data))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
 		if err != nil {
 			return nil, fmt.Errorf("build request: %w", err)
 		}
@@ -165,14 +146,11 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
-			if isTransient(0, err) {
-				lastErr = err
-				continue
-			}
-			return nil, err
+			lastErr = err
+			continue // all network errors are transient
 		}
 
-		if isTransient(resp.StatusCode, nil) {
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
 			resp.Body.Close()
 			lastErr = fmt.Errorf("transient HTTP %d", resp.StatusCode)
 			continue
@@ -182,36 +160,9 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 			return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 		}
 
-		var result struct {
-			Data []struct {
-				Embedding []float32 `json:"embedding"`
-			} `json:"data"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			resp.Body.Close()
-			return nil, fmt.Errorf("decode response: %w", err)
-		}
-		resp.Body.Close()
-
-		if len(result.Data) == 0 {
-			return nil, fmt.Errorf("no embedding data in response")
-		}
-		return result.Data[0].Embedding, nil
+		return resp.Body, nil
 	}
 	return nil, lastErr
-}
-
-func isTransient(statusCode int, err error) bool {
-	if err != nil {
-		return true
-	}
-	if statusCode == http.StatusTooManyRequests {
-		return true
-	}
-	if statusCode >= 500 {
-		return true
-	}
-	return false
 }
 
 // VectorToBlob converts float32 slice to little-endian bytes.

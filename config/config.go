@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -111,43 +110,21 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// Resolve returns the config file path by checking, in order:
-// 1. MNEMON_CONFIG env var
-// 2. --config CLI flag
-// 3. ~/.config/mnemon-bot/config.toml
+// Resolve returns the config file path from MNEMON_CONFIG env var,
+// falling back to ~/.config/mnemon-bot/config.toml.
+// The --config CLI flag is handled separately in main.go.
 func Resolve() string {
-	var path string
-
-	if v := os.Getenv("MNEMON_CONFIG"); v != "" {
-		path = v
-	} else {
-		path = parseConfigFlag()
-	}
-
+	path := os.Getenv("MNEMON_CONFIG")
 	if path == "" {
 		home, _ := os.UserHomeDir()
 		path = filepath.Join(home, ".config", "mnemon-bot", "config.toml")
 	}
-
 	path = os.ExpandEnv(path)
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return path
 	}
 	return abs
-}
-
-func parseConfigFlag() string {
-	args := os.Args[1:]
-	for i, arg := range args {
-		if strings.HasPrefix(arg, "--config=") {
-			return strings.TrimPrefix(arg, "--config=")
-		}
-		if arg == "--config" && i+1 < len(args) {
-			return args[i+1]
-		}
-	}
-	return ""
 }
 
 // ResolveResponseMode returns the effective response mode for a server/channel pair.

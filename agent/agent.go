@@ -71,14 +71,8 @@ func (a *ChannelAgent) run(ctx context.Context) {
 }
 
 func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.MessageCreate) {
-	// 1. Determine serverID
-	serverID := a.serverID
-	if msg.GuildID == "" {
-		serverID = "DM:" + msg.Author.ID
-	}
-
-	// 2. Check response mode
-	mode := a.cfg.ResolveResponseMode(serverID, msg.ChannelID)
+	// Check response mode
+	mode := a.cfg.ResolveResponseMode(a.serverID, msg.ChannelID)
 	switch mode {
 	case "none":
 		return
@@ -94,13 +88,13 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		// always respond; model decides whether to use reply tool
 	}
 
-	// 3. Recall memories
-	memories, err := a.mem.Recall(ctx, msg.Content, serverID, 10)
+	// Recall memories
+	memories, err := a.mem.Recall(ctx, msg.Content, a.serverID, 10)
 	if err != nil {
 		slog.Warn("memory recall error", "error", err, "channel_id", a.channelID)
 	}
 
-	// 4. Build system prompt
+	// Build system prompt
 	systemPrompt := a.soulText
 	if len(memories) > 0 {
 		systemPrompt += "\n\n## Relevant Memories\n"
@@ -109,7 +103,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		}
 	}
 
-	// 5. Set up callbacks
+	// Set up callbacks
 	sendFn := func(content string) error {
 		_, err := a.session.ChannelMessageSend(msg.ChannelID, content)
 		return err
@@ -118,14 +112,16 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		return a.session.MessageReactionAdd(msg.ChannelID, msg.ID, emoji)
 	}
 
-	// 6. Build tool registry
-	reg := tools.NewDefaultRegistry(a.mem, serverID, sendFn, reactFn, a.cfg.Tools.WebSearchKey)
+	// Build tool registry
+	reg := tools.NewDefaultRegistry(a.mem, a.serverID, sendFn, reactFn)
 
-	// 7. Add user message to history
+	// Add user message to history
 	userMsg := llm.Message{Role: "user", Content: fmt.Sprintf("%s: %s", msg.Author.Username, msg.Content)}
-	msgs := append(append([]llm.Message(nil), a.history...), userMsg)
+	msgs := make([]llm.Message, len(a.history), len(a.history)+1)
+	copy(msgs, a.history)
+	msgs = append(msgs, userMsg)
 
-	// 8. Tool-call loop (up to MaxToolIterations)
+	// Tool-call loop
 	var assistantContent string
 	for iter := 0; iter < a.cfg.Agent.MaxToolIterations; iter++ {
 		choice, err := a.llm.Chat(ctx, buildMessages(systemPrompt, msgs), reg.Definitions())
@@ -164,7 +160,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		}
 	}
 
-	// 9. If assistant replied with text content (not via reply tool), send it
+	// If assistant replied with text content (not via reply tool), send it
 	if assistantContent != "" {
 		parts := splitMessage(assistantContent, 2000)
 		for _, p := range parts {
@@ -172,18 +168,14 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		}
 	}
 
-	// 10. Update history
-	// If the assistant replied with plain text content, append it to msgs before saving history.
-	// (Tool-based replies are already captured in msgs via the tool-call loop.)
+	// Update history
 	if assistantContent != "" {
 		msgs = append(msgs, llm.Message{Role: "assistant", Content: assistantContent})
 	}
-	a.history = make([]llm.Message, len(msgs))
-	copy(a.history, msgs)
-	// trim to HistoryLimit
-	if len(a.history) > a.cfg.Agent.HistoryLimit {
-		a.history = a.history[len(a.history)-a.cfg.Agent.HistoryLimit:]
+	if len(msgs) > a.cfg.Agent.HistoryLimit {
+		msgs = msgs[len(msgs)-a.cfg.Agent.HistoryLimit:]
 	}
+	a.history = msgs
 }
 
 // buildMessages constructs the message slice for the LLM with system prompt prepended.
