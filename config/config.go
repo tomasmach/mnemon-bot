@@ -131,6 +131,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("response.default_mode %q is invalid (must be smart, mention, all, or none)", cfg.Response.DefaultMode)
 	}
 	for _, agent := range cfg.Agents {
+		if agent.ServerID == "" {
+			return nil, fmt.Errorf("agent %q: server_id is required", agent.ID)
+		}
 		if agent.ResponseMode != "" && !validModes[agent.ResponseMode] {
 			return nil, fmt.Errorf("agent %s response_mode %q is invalid (must be smart, mention, all, or none)", agent.ID, agent.ResponseMode)
 		}

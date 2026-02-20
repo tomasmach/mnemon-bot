@@ -80,6 +80,8 @@ func main() {
 		}
 	}
 
+	slog.Info("agents initialized", "count", len(agentsByServerID))
+
 	// Start default bot (handles DMs + agents without custom tokens)
 	defaultBot, err := bot.New(cfg.Bot.Token)
 	if err != nil {
@@ -123,9 +125,6 @@ func main() {
 	}
 
 	webAddr := cfgStore.Get().Web.Addr
-	if webAddr == "" {
-		webAddr = ":8080"
-	}
 	webServer := web.New(webAddr, cfgStore, cfgPath, router)
 	webServer.StartStatusPoller(ctx)
 	go func() {
@@ -143,9 +142,13 @@ func main() {
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutCancel()
 	_ = webServer.Shutdown(shutCtx)
-	defaultBot.Stop()
+	if err := defaultBot.Stop(); err != nil {
+		slog.Warn("failed to stop default bot", "error", err)
+	}
 	for _, b := range customBots {
-		b.Stop()
+		if err := b.Stop(); err != nil {
+			slog.Warn("failed to stop custom bot", "error", err)
+		}
 	}
 	cancel()
 	router.WaitForDrain()
