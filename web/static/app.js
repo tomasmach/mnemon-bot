@@ -182,11 +182,10 @@ function setSoulStatus(msg, isError) {
   if (!isError) setTimeout(() => { el.textContent = ''; }, 3000);
 }
 
-// --- Config tab ---
+// --- Global config ---
 
 function openSettings() {
   selectedAgentId = null;
-  selectedDetailTab = 'config';
   renderAgentSidebar();
   showPanel('config');
   loadConfig();
