@@ -30,6 +30,32 @@ type ChannelAgent struct {
 	lastActive atomic.Int64                 // UnixNano; written by agent goroutine, read by Status()
 }
 
+// buildUserMessage converts a Discord message into an llm.Message, attaching
+// any image URLs as vision content parts when present.
+func buildUserMessage(msg *discordgo.MessageCreate) llm.Message {
+	text := fmt.Sprintf("%s: %s", msg.Author.Username, msg.Content)
+
+	var images []*discordgo.MessageAttachment
+	for _, a := range msg.Attachments {
+		if strings.HasPrefix(a.ContentType, "image/") {
+			images = append(images, a)
+		}
+	}
+	if len(images) == 0 {
+		return llm.Message{Role: "user", Content: text}
+	}
+
+	parts := make([]llm.ContentPart, 0, 1+len(images))
+	parts = append(parts, llm.ContentPart{Type: "text", Text: text})
+	for _, a := range images {
+		parts = append(parts, llm.ContentPart{
+			Type:     "image_url",
+			ImageURL: &llm.ImageURL{URL: a.URL},
+		})
+	}
+	return llm.Message{Role: "user", ContentParts: parts}
+}
+
 func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClient *llm.Client, resources *AgentResources) *ChannelAgent {
 	return &ChannelAgent{
 		channelID: channelID,
@@ -157,7 +183,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	reg := tools.NewDefaultRegistry(a.resources.Memory, a.serverID, sendFn, reactFn, cfg.Tools.WebSearchKey)
 
 	// Add user message to history
-	userMsg := llm.Message{Role: "user", Content: fmt.Sprintf("%s: %s", msg.Author.Username, msg.Content)}
+	userMsg := buildUserMessage(msg)
 	msgs := make([]llm.Message, len(a.history), len(a.history)+1)
 	copy(msgs, a.history)
 	msgs = append(msgs, userMsg)
