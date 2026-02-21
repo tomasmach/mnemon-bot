@@ -35,19 +35,35 @@ type ChannelAgent struct {
 	msgCh chan *discordgo.MessageCreate // buffered 100
 }
 
+// resolveMentions replaces raw Discord mention syntax (<@ID> and <@!ID>) with
+// readable display names using the resolved User objects Discord provides.
+func resolveMentions(content string, mentions []*discordgo.User) string {
+	for _, u := range mentions {
+		name := u.GlobalName
+		if name == "" {
+			name = u.Username
+		}
+		content = strings.ReplaceAll(content, "<@"+u.ID+">", "@"+name)
+		content = strings.ReplaceAll(content, "<@!"+u.ID+">", "@"+name)
+	}
+	return content
+}
+
 // historyUserContent formats the text content for a user message in backfilled
 // history, annotating reply-to context when the message is a Discord reply.
 func historyUserContent(m *discordgo.Message) string {
+	content := resolveMentions(m.Content, m.Mentions)
 	if m.ReferencedMessage != nil && m.ReferencedMessage.Author != nil {
-		return fmt.Sprintf("%s (replying to %s): %s", m.Author.Username, m.ReferencedMessage.Author.Username, m.Content)
+		return fmt.Sprintf("%s (replying to %s): %s", m.Author.Username, m.ReferencedMessage.Author.Username, content)
 	}
-	return fmt.Sprintf("%s: %s", m.Author.Username, m.Content)
+	return fmt.Sprintf("%s: %s", m.Author.Username, content)
 }
 
 // buildUserMessage converts a Discord message into an llm.Message, attaching
 // any image URLs as vision content parts when present.
 func buildUserMessage(msg *discordgo.MessageCreate) llm.Message {
-	text := fmt.Sprintf("%s: %s", msg.Author.Username, msg.Content)
+	content := resolveMentions(msg.Content, msg.Mentions)
+	text := fmt.Sprintf("%s: %s", msg.Author.Username, content)
 
 	var images []*discordgo.MessageAttachment
 	for _, a := range msg.Attachments {
@@ -266,7 +282,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 			responseText = reg.ReplyText
 		}
 		// Use the formatted user message (as seen by the LLM), not the raw Discord content.
-		userMsgText := fmt.Sprintf("%s: %s", msg.Author.Username, msg.Content)
+		userMsgText := fmt.Sprintf("%s: %s", msg.Author.Username, resolveMentions(msg.Content, msg.Mentions))
 		if err := a.resources.Memory.LogConversation(ctx, a.channelID, userMsgText, toolCallsJSON, responseText); err != nil {
 			a.logger.Warn("log conversation error", "error", err)
 		}
