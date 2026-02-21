@@ -66,6 +66,7 @@ type AgentConfig struct {
 	SoulFile     string          `toml:"soul_file" json:"soul_file,omitempty"`
 	DBPath       string          `toml:"db_path" json:"db_path,omitempty"`
 	ResponseMode string          `toml:"response_mode" json:"response_mode,omitempty"`
+	Language     string          `toml:"language" json:"language,omitempty"`
 	Channels     []ChannelConfig `toml:"channels" json:"channels,omitempty"`
 }
 
@@ -241,4 +242,16 @@ func (cfg *Config) ResolveResponseMode(serverID, channelID string) string {
 		break
 	}
 	return cfg.Response.DefaultMode
+}
+
+// ResolveLanguage returns the configured language for a server.
+// Priority: agent-level > "" (no language override).
+func (cfg *Config) ResolveLanguage(serverID, channelID string) string {
+	for _, agent := range cfg.Agents {
+		if agent.ServerID != serverID {
+			continue
+		}
+		return agent.Language
+	}
+	return ""
 }

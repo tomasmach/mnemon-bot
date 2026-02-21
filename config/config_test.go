@@ -75,6 +75,41 @@ db_path = "/original/path/memory.db"
 	}
 }
 
+func TestResolveLanguage(t *testing.T) {
+	cfg := &config.Config{
+		Agents: []config.AgentConfig{
+			{
+				ServerID: "server1",
+				Language: "Czech",
+			},
+			{
+				ServerID: "server2",
+			},
+		},
+	}
+
+	tests := []struct {
+		name      string
+		serverID  string
+		channelID string
+		want      string
+	}{
+		{"agent-level language", "server1", "chan1", "Czech"},
+		{"unknown server returns empty", "server3", "chan1", ""},
+		{"agent with no language returns empty", "server2", "chan1", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := cfg.ResolveLanguage(tt.serverID, tt.channelID)
+			if got != tt.want {
+				t.Errorf("ResolveLanguage(%q, %q) = %q, want %q",
+					tt.serverID, tt.channelID, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveResponseModeEmptyChannelOverride(t *testing.T) {
 	// Channel entry with no ResponseMode set should fall through to agent-level
 	cfg := &config.Config{
