@@ -182,9 +182,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	if len(msgs) > cfg.Agent.HistoryLimit {
 		msgs = msgs[len(msgs)-cfg.Agent.HistoryLimit:]
 	}
-	historyCopy := make([]llm.Message, len(msgs))
-	copy(historyCopy, msgs)
-	a.history = historyCopy
+	a.history = msgs
 }
 
 // buildMessages constructs the message slice for the LLM with system prompt prepended.

@@ -461,36 +461,7 @@ func (s *Server) handleGetAgentSoul(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
 	}
-	found := &cfg.Agents[idx]
-
-	w.Header().Set("Content-Type", "application/json")
-	if found.SoulFile == "" {
-		json.NewEncoder(w).Encode(map[string]any{
-			"content":       "",
-			"path":          "",
-			"using_default": true,
-		})
-		return
-	}
-
-	expanded := config.ExpandPath(found.SoulFile)
-	data, err := os.ReadFile(expanded)
-	if err != nil {
-		if os.IsNotExist(err) {
-			json.NewEncoder(w).Encode(map[string]any{
-				"content": "",
-				"path":    expanded,
-			})
-			return
-		}
-		slog.Error("read soul file", "error", err)
-		http.Error(w, "failed to read soul file", http.StatusInternalServerError)
-		return
-	}
-	json.NewEncoder(w).Encode(map[string]any{
-		"content": string(data),
-		"path":    expanded,
-	})
+	respondSoulFile(w, cfg.Agents[idx].SoulFile)
 }
 
 func (s *Server) handlePutAgentSoul(w http.ResponseWriter, r *http.Request) {
@@ -551,9 +522,14 @@ func (s *Server) handlePutAgentSoul(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetGlobalSoul(w http.ResponseWriter, r *http.Request) {
-	cfg := s.cfgStore.Get()
+	respondSoulFile(w, s.cfgStore.Get().Bot.SoulFile)
+}
+
+// respondSoulFile reads a soul file path and writes the JSON response.
+// If soulFile is empty, responds with using_default: true.
+func respondSoulFile(w http.ResponseWriter, soulFile string) {
 	w.Header().Set("Content-Type", "application/json")
-	if cfg.Bot.SoulFile == "" {
+	if soulFile == "" {
 		json.NewEncoder(w).Encode(map[string]any{
 			"content":       "",
 			"path":          "",
@@ -561,14 +537,14 @@ func (s *Server) handleGetGlobalSoul(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	expanded := config.ExpandPath(cfg.Bot.SoulFile)
+	expanded := config.ExpandPath(soulFile)
 	data, err := os.ReadFile(expanded)
 	if err != nil {
 		if os.IsNotExist(err) {
 			json.NewEncoder(w).Encode(map[string]any{"content": "", "path": expanded})
 			return
 		}
-		slog.Error("read global soul file", "error", err)
+		slog.Error("read soul file", "error", err)
 		http.Error(w, "failed to read soul file", http.StatusInternalServerError)
 		return
 	}
@@ -610,48 +586,18 @@ func (s *Server) handlePutGlobalSoul(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if needsConfigUpdate {
-		data, err := os.ReadFile(s.cfgPath)
-		if err != nil {
-			http.Error(w, "failed to read config", http.StatusInternalServerError)
+		if err := s.patchConfig(func(raw map[string]any) {
+			bot, _ := raw["bot"].(map[string]any)
+			if bot == nil {
+				bot = make(map[string]any)
+			}
+			bot["soul_file"] = soulPath
+			raw["bot"] = bot
+		}); err != nil {
+			slog.Error("update config for global soul", "error", err)
+			http.Error(w, fmt.Sprintf("failed to update config: %v", err), http.StatusInternalServerError)
 			return
 		}
-		var raw map[string]any
-		if err := toml.Unmarshal(data, &raw); err != nil {
-			http.Error(w, "failed to parse config", http.StatusInternalServerError)
-			return
-		}
-		bot, _ := raw["bot"].(map[string]any)
-		if bot == nil {
-			bot = make(map[string]any)
-		}
-		bot["soul_file"] = soulPath
-		raw["bot"] = bot
-
-		var buf bytes.Buffer
-		if err := toml.NewEncoder(&buf).Encode(raw); err != nil {
-			http.Error(w, "failed to encode config", http.StatusInternalServerError)
-			return
-		}
-		tmpPath := s.cfgPath + ".tmp"
-		if err := os.WriteFile(tmpPath, buf.Bytes(), 0o644); err != nil {
-			http.Error(w, "failed to write config", http.StatusInternalServerError)
-			return
-		}
-		if _, err := config.Load(tmpPath); err != nil {
-			os.Remove(tmpPath)
-			http.Error(w, fmt.Sprintf("invalid config: %v", err), http.StatusBadRequest)
-			return
-		}
-		if err := os.Rename(tmpPath, s.cfgPath); err != nil {
-			os.Remove(tmpPath)
-			http.Error(w, "failed to save config", http.StatusInternalServerError)
-			return
-		}
-		if _, err := s.cfgStore.Reload(); err != nil {
-			http.Error(w, fmt.Sprintf("reload failed: %v", err), http.StatusInternalServerError)
-			return
-		}
-		s.broadcast("event: config_reloaded\ndata: {}\n\n")
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -660,18 +606,6 @@ func (s *Server) handlePutGlobalSoul(w http.ResponseWriter, r *http.Request) {
 
 // writeAgents replaces the [[agents]] section in the config file and reloads.
 func (s *Server) writeAgents(agents []config.AgentConfig) error {
-	data, err := os.ReadFile(s.cfgPath)
-	if err != nil {
-		return fmt.Errorf("read config: %w", err)
-	}
-
-	// Parse existing TOML into a generic map to preserve non-agent fields
-	var raw map[string]any
-	if err := toml.Unmarshal(data, &raw); err != nil {
-		return fmt.Errorf("parse config: %w", err)
-	}
-
-	// Replace agents section — convert via JSON round-trip
 	// Build token map before marshaling — Token has json:"-" so Marshal drops it
 	tokenByID := make(map[string]string, len(agents))
 	for _, a := range agents {
@@ -695,19 +629,35 @@ func (s *Server) writeAgents(agents []config.AgentConfig) error {
 			}
 		}
 	}
-	if len(agentsRaw) == 0 {
-		delete(raw, "agents")
-	} else {
-		raw["agents"] = agentsRaw
+
+	return s.patchConfig(func(raw map[string]any) {
+		if len(agentsRaw) == 0 {
+			delete(raw, "agents")
+		} else {
+			raw["agents"] = agentsRaw
+		}
+	})
+}
+
+// patchConfig reads the config TOML into a generic map, applies mutate to modify it,
+// then validates, writes atomically, reloads the store, and broadcasts a config_reloaded event.
+func (s *Server) patchConfig(mutate func(raw map[string]any)) error {
+	data, err := os.ReadFile(s.cfgPath)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+	var raw map[string]any
+	if err := toml.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("parse config: %w", err)
 	}
 
-	// Encode back to TOML
+	mutate(raw)
+
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(raw); err != nil {
 		return fmt.Errorf("encode config: %w", err)
 	}
 
-	// Validate before writing
 	tmpPath := s.cfgPath + ".tmp"
 	if err := os.WriteFile(tmpPath, buf.Bytes(), 0o644); err != nil {
 		return err
@@ -720,7 +670,6 @@ func (s *Server) writeAgents(agents []config.AgentConfig) error {
 		os.Remove(tmpPath)
 		return err
 	}
-
 	if _, err := s.cfgStore.Reload(); err != nil {
 		return fmt.Errorf("reload: %w", err)
 	}

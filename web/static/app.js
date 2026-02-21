@@ -543,7 +543,9 @@ function renderMonitorAgents(agentStatuses) {
   agentStatuses.forEach(a => {
     const last = a.last_active ? new Date(a.last_active).toLocaleString() : '—';
     const qd = a.queue_depth || 0;
-    const badgeClass = qd === 0 ? 'badge badge-green' : qd <= 2 ? 'badge badge-amber' : 'badge badge-red';
+    let badgeClass = 'badge badge-red';
+    if (qd === 0) badgeClass = 'badge badge-green';
+    else if (qd <= 2) badgeClass = 'badge badge-amber';
     const card = document.createElement('div');
     card.className = 'agent-card';
     card.innerHTML =
