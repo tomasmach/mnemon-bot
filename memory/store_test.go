@@ -89,7 +89,11 @@ func TestSaveAndRecall(t *testing.T) {
 }
 
 func TestForgetHidesFromRecall(t *testing.T) {
-	store := newTestStore(t, nil)
+	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(failSrv.Close)
+	store := newTestStore(t, failSrv)
 	ctx := context.Background()
 
 	id, err := store.Save(ctx, "secret memory", "srv1", "user1", "chan1", 0.5)
@@ -148,7 +152,11 @@ func TestSaveWithEmbeddingFailure(t *testing.T) {
 }
 
 func TestListLIKEEscaping(t *testing.T) {
-	store := newTestStore(t, nil)
+	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(failSrv.Close)
+	store := newTestStore(t, failSrv)
 	ctx := context.Background()
 
 	id, err := store.Save(ctx, "100% done with task_1", "srv1", "user1", "chan1", 0.5)
@@ -173,11 +181,15 @@ func TestListLIKEEscaping(t *testing.T) {
 }
 
 func TestListUnderscoreEscaping(t *testing.T) {
-	store := newTestStore(t, nil)
+	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(failSrv.Close)
+	store := newTestStore(t, failSrv)
 	ctx := context.Background()
 
 	// Save two memories: one matching, one that would match with unescaped _
-	_, err := store.Save(ctx, "task_done", "srv1", "u", "c", 0.5)
+	id1, err := store.Save(ctx, "task_done", "srv1", "u", "c", 0.5)
 	if err != nil {
 		t.Fatalf("Save() error: %v", err)
 	}
@@ -191,9 +203,16 @@ func TestListUnderscoreEscaping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List() error: %v", err)
 	}
+	foundID1 := false
 	for _, r := range rows {
 		if r.ID == id2 {
 			t.Error("underscore was not escaped: 'taskXdone' matched 'task_done' query")
 		}
+		if r.ID == id1 {
+			foundID1 = true
+		}
+	}
+	if !foundID1 {
+		t.Errorf("expected memory %q ('task_done') to appear in results, but it did not", id1)
 	}
 }

@@ -421,7 +421,7 @@ if err != nil {
 
 ## Testing
 
-Test files live alongside the code they test (`store_test.go` next to `store.go`). Use `_test` package suffix for black-box tests.
+Test files live alongside the code they test (`store_test.go` next to `store.go`). Use `_test` package suffix for black-box tests. Exception: when a test must access unexported symbols (functions, types, or struct fields), declare the test file in the internal package (no `_test` suffix) — as in `memory/rrf_test.go` (calls `cosine`, `rrfMerge`) and `agent/router_test.go` (accesses `r.mu`, `r.agentsByServerID`). Prefer the `export_test.go` pattern — a file in the internal package that re-exports unexported symbols only for tests — over putting the entire test file in the internal package; use the internal package directly only when the test itself needs to manipulate private state.
 
 ```go
 func TestMemoryRoundtrip(t *testing.T) {

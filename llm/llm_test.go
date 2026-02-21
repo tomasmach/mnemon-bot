@@ -1,4 +1,4 @@
-package llm
+package llm_test
 
 import (
 	"context"
@@ -11,12 +11,13 @@ import (
 	"time"
 
 	"github.com/tomasmach/mnemon-bot/config"
+	"github.com/tomasmach/mnemon-bot/llm"
 )
 
 func TestVectorRoundtrip(t *testing.T) {
 	original := []float32{1.5, -0.5, 0.0, math.MaxFloat32}
-	blob := VectorToBlob(original)
-	decoded := BlobToVector(blob)
+	blob := llm.VectorToBlob(original)
+	decoded := llm.BlobToVector(blob)
 
 	if len(decoded) != len(original) {
 		t.Fatalf("length mismatch: got %d, want %d", len(decoded), len(original))
@@ -31,20 +32,20 @@ func TestVectorRoundtrip(t *testing.T) {
 func TestBlobToVectorTruncates(t *testing.T) {
 	// 5 bytes: not a multiple of 4 — last byte should be silently dropped
 	blob := []byte{0, 0, 128, 63, 0xFF}
-	decoded := BlobToVector(blob)
+	decoded := llm.BlobToVector(blob)
 	if len(decoded) != 1 {
 		t.Errorf("expected 1 float (5 bytes / 4 = 1), got %d", len(decoded))
 	}
 }
 
 func TestBlobToVectorEmpty(t *testing.T) {
-	decoded := BlobToVector(nil)
+	decoded := llm.BlobToVector(nil)
 	if len(decoded) != 0 {
 		t.Errorf("expected empty result, got %v", decoded)
 	}
 }
 
-func clientWithBaseURL(t *testing.T, baseURL string) *Client {
+func clientWithBaseURL(t *testing.T, baseURL string) *llm.Client {
 	t.Helper()
 	cfg := &config.Config{
 		LLM: config.LLMConfig{
@@ -56,14 +57,12 @@ func clientWithBaseURL(t *testing.T, baseURL string) *Client {
 		},
 	}
 	cfgStore := config.NewStoreFromConfig(cfg)
-	return New(cfgStore)
+	return llm.New(cfgStore)
 }
 
 func TestChatRetriesOn5xx(t *testing.T) {
 	// Speed up retries in this test
-	orig := retryDelays
-	retryDelays = []time.Duration{0, 0}
-	t.Cleanup(func() { retryDelays = orig })
+	t.Cleanup(llm.SetRetryDelays([]time.Duration{0, 0}))
 
 	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +81,7 @@ func TestChatRetriesOn5xx(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	client := clientWithBaseURL(t, srv.URL)
-	choice, err := client.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil)
+	choice, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil)
 	if err != nil {
 		t.Fatalf("expected success after retries, got: %v", err)
 	}
@@ -103,7 +102,7 @@ func TestChatFailsFastOn4xx(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	client := clientWithBaseURL(t, srv.URL)
-	_, err := client.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil)
+	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil)
 	if err == nil {
 		t.Fatal("expected error on 4xx, got nil")
 	}
@@ -114,9 +113,7 @@ func TestChatFailsFastOn4xx(t *testing.T) {
 
 func TestChatRetries429(t *testing.T) {
 	// 429 Too Many Requests should also be retried
-	orig := retryDelays
-	retryDelays = []time.Duration{0, 0}
-	t.Cleanup(func() { retryDelays = orig })
+	t.Cleanup(llm.SetRetryDelays([]time.Duration{0, 0}))
 
 	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -135,7 +132,7 @@ func TestChatRetries429(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	client := clientWithBaseURL(t, srv.URL)
-	_, err := client.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil)
+	_, err := client.Chat(context.Background(), []llm.Message{{Role: "user", Content: "hi"}}, nil)
 	if err != nil {
 		t.Fatalf("expected success after 429 retry, got: %v", err)
 	}

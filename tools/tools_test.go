@@ -1,14 +1,16 @@
-package tools
+package tools_test
 
 import (
 	"context"
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/tomasmach/mnemon-bot/tools"
 )
 
 func TestDispatchUnknownToolReturnsError(t *testing.T) {
-	r := NewRegistry()
+	r := tools.NewRegistry()
 	_, err := r.Dispatch(context.Background(), "nonexistent_tool", json.RawMessage(`{}`))
 	if err == nil {
 		t.Fatal("Dispatch() on unknown tool should return an error")
@@ -20,7 +22,7 @@ func TestDispatchUnknownToolReturnsError(t *testing.T) {
 
 func TestSplitMessageRespects2000CharLimit(t *testing.T) {
 	long := strings.Repeat("a", 4500)
-	parts := SplitMessage(long, 2000)
+	parts := tools.SplitMessage(long, 2000)
 	for i, p := range parts {
 		if len([]rune(p)) > 2000 {
 			t.Errorf("part %d has %d runes, exceeds 2000", i, len([]rune(p)))
@@ -35,7 +37,7 @@ func TestSplitMessageRespects2000CharLimit(t *testing.T) {
 
 func TestSplitMessageShortString(t *testing.T) {
 	msg := "hello world"
-	parts := SplitMessage(msg, 2000)
+	parts := tools.SplitMessage(msg, 2000)
 	if len(parts) != 1 {
 		t.Errorf("expected 1 part for short string, got %d", len(parts))
 	}
@@ -48,7 +50,7 @@ func TestSplitMessageUnicode(t *testing.T) {
 	// Each emoji is 1 rune but multiple bytes; limit should be in runes
 	emoji := "😀"
 	long := strings.Repeat(emoji, 2500)
-	parts := SplitMessage(long, 2000)
+	parts := tools.SplitMessage(long, 2000)
 	for i, p := range parts {
 		runeCount := len([]rune(p))
 		if runeCount > 2000 {
@@ -63,7 +65,7 @@ func TestSplitMessageUnicode(t *testing.T) {
 
 func TestSplitMessageExactLimit(t *testing.T) {
 	msg := strings.Repeat("x", 2000)
-	parts := SplitMessage(msg, 2000)
+	parts := tools.SplitMessage(msg, 2000)
 	if len(parts) != 1 {
 		t.Errorf("string exactly at limit should be 1 part, got %d", len(parts))
 	}

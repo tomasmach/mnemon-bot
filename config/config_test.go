@@ -1,17 +1,19 @@
-package config
+package config_test
 
 import (
 	"testing"
+
+	"github.com/tomasmach/mnemon-bot/config"
 )
 
 func TestResolveResponseMode(t *testing.T) {
-	cfg := &Config{
-		Response: ResponseConfig{DefaultMode: "smart"},
-		Agents: []AgentConfig{
+	cfg := &config.Config{
+		Response: config.ResponseConfig{DefaultMode: "smart"},
+		Agents: []config.AgentConfig{
 			{
 				ServerID:     "server1",
 				ResponseMode: "all",
-				Channels: []ChannelConfig{
+				Channels: []config.ChannelConfig{
 					{ID: "chan1", ResponseMode: "none"},
 				},
 			},
@@ -43,13 +45,13 @@ func TestResolveResponseMode(t *testing.T) {
 
 func TestResolveResponseModeEmptyChannelOverride(t *testing.T) {
 	// Channel entry with no ResponseMode set should fall through to agent-level
-	cfg := &Config{
-		Response: ResponseConfig{DefaultMode: "smart"},
-		Agents: []AgentConfig{
+	cfg := &config.Config{
+		Response: config.ResponseConfig{DefaultMode: "smart"},
+		Agents: []config.AgentConfig{
 			{
 				ServerID:     "srv1",
 				ResponseMode: "mention",
-				Channels: []ChannelConfig{
+				Channels: []config.ChannelConfig{
 					{ID: "chan1", ResponseMode: ""},
 				},
 			},
