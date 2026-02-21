@@ -138,6 +138,9 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePostConfig(w http.ResponseWriter, r *http.Request) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
 		http.Error(w, "failed to read body", http.StatusBadRequest)
@@ -348,6 +351,12 @@ func (s *Server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent id already exists", http.StatusConflict)
 		return
 	}
+	for _, a := range cfg.Agents {
+		if a.ServerID == input.ServerID {
+			http.Error(w, "server_id already exists", http.StatusConflict)
+			return
+		}
+	}
 
 	newAgents := make([]config.AgentConfig, len(cfg.Agents)+1)
 	copy(newAgents, cfg.Agents)
@@ -380,6 +389,7 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
 	}
+	oldServerID := cfg.Agents[idx].ServerID
 
 	newAgents := make([]config.AgentConfig, len(cfg.Agents))
 	copy(newAgents, cfg.Agents)
@@ -393,6 +403,9 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 		slog.Error("write agents", "error", err)
 		http.Error(w, "failed to save agent", http.StatusInternalServerError)
 		return
+	}
+	if input.ServerID != oldServerID {
+		s.router.UnloadAgent(oldServerID)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -112,9 +113,24 @@ func (r *Router) MemoryForServer(serverID string) *memory.Store {
 
 // tryHotLoad checks cfgStore for a newly added agent and loads it into agentsByServerID.
 // Must be called with r.mu held. Only loads agents without custom tokens (those require restart).
+// DM server IDs (prefixed with "DM:") are handled specially: they use the global default config
+// and the default memory store so DMs are always served without requiring explicit configuration.
 // Returns the resources if successfully loaded, nil otherwise.
 func (r *Router) tryHotLoad(serverID string) *AgentResources {
 	cfg := r.cfgStore.Get()
+
+	if strings.HasPrefix(serverID, "DM:") {
+		mem, err := memory.New(&config.MemoryConfig{DBPath: config.ExpandPath(cfg.Memory.DBPath)}, r.llm)
+		if err != nil {
+			slog.Error("failed to open memory store for DM", "server_id", serverID, "error", err)
+			return nil
+		}
+		res := &AgentResources{Config: &config.AgentConfig{}, Memory: mem, Session: r.defaultSession}
+		r.agentsByServerID[serverID] = res
+		slog.Info("created DM agent resources", "server_id", serverID)
+		return res
+	}
+
 	for i := range cfg.Agents {
 		a := &cfg.Agents[i]
 		if a.ServerID != serverID {
