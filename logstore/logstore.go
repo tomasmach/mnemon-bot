@@ -1,5 +1,5 @@
 // Package logstore provides SQLite-backed persistent storage for slog entries
-// and a custom slog.Handler that tees log records to stderr and to the DB.
+// and a custom slog.Handler that tees log records to an inner handler and to the DB.
 package logstore
 
 import (
@@ -7,12 +7,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log/slog"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"log/slog"
 )
 
 const migrationSQL = `
@@ -49,7 +50,7 @@ func Open(dbPath string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		return nil, fmt.Errorf("create log db dir: %w", err)
 	}
-	dsn := dbPath + "?_journal_mode=WAL"
+	dsn := dbPath + "?_foreign_keys=on&_journal_mode=WAL"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open log db: %w", err)
@@ -61,25 +62,28 @@ func Open(dbPath string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-// Write persists a single log entry. Silently ignores errors.
-func (s *Store) Write(ts time.Time, level, msg, serverID, channelID, attrsJSON string) {
-	_, _ = s.db.ExecContext(context.Background(),
+// write persists a single log entry. Silently discards errors — logging the error
+// here would recurse back into slog. Prunes the table 1 in 500 writes to avoid O(N) overhead.
+func (s *Store) write(ctx context.Context, ts time.Time, level, msg, serverID, channelID, attrsJSON string) {
+	_, _ = s.db.ExecContext(ctx,
 		`INSERT INTO logs (ts, level, msg, server_id, channel_id, attrs) VALUES (?, ?, ?, ?, ?, ?)`,
 		ts, level, msg, serverID, channelID, attrsJSON,
 	)
-	s.prune()
+	if rand.IntN(500) == 0 {
+		s.prune(ctx)
+	}
 }
 
 // prune keeps at most 10 000 rows by deleting the oldest excess rows.
-func (s *Store) prune() {
-	_, _ = s.db.ExecContext(context.Background(),
+func (s *Store) prune(ctx context.Context) {
+	_, _ = s.db.ExecContext(ctx,
 		`DELETE FROM logs WHERE id NOT IN (SELECT id FROM logs ORDER BY id DESC LIMIT 10000)`,
 	)
 }
 
 // List returns log rows for a server, optionally filtered by minimum level.
 // level may be "debug", "info", "warn", "error", or "" (no filter).
-func (s *Store) List(serverID, level string, limit, offset int) ([]LogRow, int, error) {
+func (s *Store) List(ctx context.Context, serverID, level string, limit, offset int) ([]LogRow, int, error) {
 	if limit == 0 {
 		limit = 100
 	}
@@ -88,7 +92,6 @@ func (s *Store) List(serverID, level string, limit, offset int) ([]LogRow, int, 
 	args := []any{serverID}
 
 	if level != "" {
-		// Map level name to numeric value for range comparison
 		levels := map[string]int{"debug": -4, "info": 0, "warn": 4, "error": 8}
 		if n, ok := levels[level]; ok {
 			where += " AND CASE level WHEN 'DEBUG' THEN -4 WHEN 'INFO' THEN 0 WHEN 'WARN' THEN 4 WHEN 'ERROR' THEN 8 ELSE 0 END >= ?"
@@ -97,13 +100,13 @@ func (s *Store) List(serverID, level string, limit, offset int) ([]LogRow, int, 
 	}
 
 	var total int
-	if err := s.db.QueryRowContext(context.Background(),
+	if err := s.db.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM logs WHERE "+where, args...,
 	).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count logs: %w", err)
 	}
 
-	rows, err := s.db.QueryContext(context.Background(),
+	rows, err := s.db.QueryContext(ctx,
 		"SELECT id, ts, level, msg, COALESCE(server_id,''), COALESCE(channel_id,''), COALESCE(attrs,'') FROM logs WHERE "+where+
 			" ORDER BY id DESC LIMIT ? OFFSET ?",
 		append(args, limit, offset)...,
@@ -125,12 +128,12 @@ func (s *Store) List(serverID, level string, limit, offset int) ([]LogRow, int, 
 }
 
 // Handler is a slog.Handler that tees records to an inner handler and to a Store.
-// It accumulates attrs added via WithAttrs/WithGroup so it can extract server_id/channel_id.
+// Attrs added via WithAttrs are accumulated so that server_id/channel_id are
+// available even when they were attached before the log call.
 type Handler struct {
-	inner     slog.Handler
-	store     *Store
-	preAttrs  map[string]string // pre-built string attrs from WithAttrs
-	groupPath []string
+	inner    slog.Handler
+	store    *Store
+	preAttrs map[string]string // flat attrs accumulated via WithAttrs
 }
 
 // NewHandler wraps inner with a tee to store.
@@ -144,25 +147,22 @@ func (h *Handler) Enabled(ctx context.Context, l slog.Level) bool {
 
 func (h *Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	child := &Handler{
-		inner:     h.inner.WithAttrs(attrs),
-		store:     h.store,
-		preAttrs:  copyMap(h.preAttrs),
-		groupPath: h.groupPath,
+		inner:    h.inner.WithAttrs(attrs),
+		store:    h.store,
+		preAttrs: copyMap(h.preAttrs),
 	}
 	for _, a := range attrs {
-		if a.Value.Kind() == slog.KindString {
-			child.preAttrs[a.Key] = a.Value.String()
-		}
+		// Use Value.String() for all kinds so non-string values are still captured.
+		child.preAttrs[a.Key] = a.Value.String()
 	}
 	return child
 }
 
 func (h *Handler) WithGroup(name string) slog.Handler {
 	return &Handler{
-		inner:     h.inner.WithGroup(name),
-		store:     h.store,
-		preAttrs:  copyMap(h.preAttrs),
-		groupPath: append(append([]string{}, h.groupPath...), name),
+		inner:    h.inner.WithGroup(name),
+		store:    h.store,
+		preAttrs: copyMap(h.preAttrs),
 	}
 }
 
@@ -193,7 +193,7 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 		attrsJSON = string(b)
 	}
 
-	h.store.Write(r.Time, r.Level.String(), r.Message, serverID, channelID, attrsJSON)
+	h.store.write(ctx, r.Time, r.Level.String(), r.Message, serverID, channelID, attrsJSON)
 	return nil
 }
 
