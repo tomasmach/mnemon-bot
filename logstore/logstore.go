@@ -73,7 +73,7 @@ func (s *Store) Write(ts time.Time, level, msg, serverID, channelID, attrsJSON s
 // prune keeps at most 10 000 rows by deleting the oldest excess rows.
 func (s *Store) prune() {
 	_, _ = s.db.ExecContext(context.Background(),
-		`DELETE FROM logs WHERE id IN (SELECT id FROM logs ORDER BY id ASC LIMIT MAX(0, (SELECT COUNT(*) FROM logs) - 10000))`,
+		`DELETE FROM logs WHERE id NOT IN (SELECT id FROM logs ORDER BY id DESC LIMIT 10000)`,
 	)
 }
 
