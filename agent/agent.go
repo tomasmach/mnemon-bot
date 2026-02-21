@@ -76,7 +76,7 @@ func (a *ChannelAgent) backfillHistory(ctx context.Context, beforeID string) []l
 	}
 	msgs, err := a.resources.Session.ChannelMessages(a.channelID, limit, beforeID, "", "")
 	if err != nil {
-		slog.Warn("failed to backfill channel history", "channel_id", a.channelID, "err", err)
+		slog.Warn("failed to backfill channel history", "error", err, "channel_id", a.channelID)
 		return nil
 	}
 	botID := a.resources.Session.State.User.ID
@@ -99,10 +99,6 @@ func (a *ChannelAgent) backfillHistory(ctx context.Context, beforeID string) []l
 func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.MessageCreate) {
 	a.lastActive.Store(time.Now().UnixNano())
 
-	if len(a.history) == 0 {
-		a.history = a.backfillHistory(ctx, msg.ID)
-	}
-
 	cfg := a.cfgStore.Get()
 
 	// Check response mode
@@ -124,6 +120,13 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		// always respond
 	case "smart":
 		// always respond; model decides whether to use reply tool
+	}
+
+	if len(a.history) == 0 {
+		a.history = a.backfillHistory(ctx, msg.ID)
+		if len(a.history) > cfg.Agent.HistoryLimit {
+			a.history = a.history[len(a.history)-cfg.Agent.HistoryLimit:]
+		}
 	}
 
 	// Recall memories
