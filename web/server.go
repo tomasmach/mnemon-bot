@@ -487,10 +487,14 @@ func (s *Server) handleGetAgentLogs(w http.ResponseWriter, r *http.Request) {
 	limit := 100
 	offset := 0
 	if v := q.Get("limit"); v != "" {
-		limit, _ = strconv.Atoi(v)
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
 	}
 	if v := q.Get("offset"); v != "" {
-		offset, _ = strconv.Atoi(v)
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
 	}
 
 	rows, total, err := s.logStore.List(r.Context(), serverID, level, limit, offset)
@@ -521,7 +525,7 @@ func (s *Server) handleGetAgentConversations(w http.ResponseWriter, r *http.Requ
 
 	mem := s.router.MemoryForServer(serverID)
 	if mem == nil {
-		http.Error(w, "agent not found", http.StatusNotFound)
+		http.Error(w, "memory store not available", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -530,10 +534,14 @@ func (s *Server) handleGetAgentConversations(w http.ResponseWriter, r *http.Requ
 	limit := 50
 	offset := 0
 	if v := q.Get("limit"); v != "" {
-		limit, _ = strconv.Atoi(v)
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
 	}
 	if v := q.Get("offset"); v != "" {
-		offset, _ = strconv.Atoi(v)
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			offset = n
+		}
 	}
 
 	rows, total, err := mem.ListConversations(r.Context(), channelID, limit, offset)
