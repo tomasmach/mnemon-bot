@@ -256,6 +256,16 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		}
 	}
 
+	if assistantContent != "" && looksLikeToolCall(assistantContent, reg.Definitions()) {
+		a.logger.Warn("suppressed tool-call syntax leaked into content", "content", assistantContent)
+		assistantContent = ""
+		if !reg.Replied {
+			if err := sendFn("I'm not sure how to respond. Please try again."); err != nil {
+				a.logger.Error("send message", "error", err)
+			}
+		}
+	}
+
 	// Log conversation on success — either plain-text reply or reply-tool response.
 	if assistantContent != "" || reg.Replied {
 		var toolCallsJSON string
@@ -273,11 +283,6 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		if err := a.resources.Memory.LogConversation(ctx, a.channelID, userMsgText, toolCallsJSON, responseText); err != nil {
 			a.logger.Warn("log conversation error", "error", err)
 		}
-	}
-
-	if assistantContent != "" && looksLikeToolCall(assistantContent, reg.Definitions()) {
-		a.logger.Warn("suppressed tool-call syntax leaked into content", "content", assistantContent)
-		assistantContent = ""
 	}
 
 	// If assistant replied with text content (not via reply tool), send it
@@ -300,12 +305,16 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	a.history = msgs
 }
 
-// looksLikeToolCall returns true when s looks like a text-based tool-call
-// invocation (e.g. memory_save(content="...", ...)) rather than prose.
+// looksLikeToolCall returns true when any line of s looks like a text-based
+// tool-call invocation (e.g. memory_save(content="...", ...)) rather than prose.
+// Checking per-line handles models that emit a preamble sentence before the call.
 func looksLikeToolCall(s string, defs []llm.ToolDefinition) bool {
-	for _, d := range defs {
-		if strings.HasPrefix(s, d.Function.Name+"(") {
-			return true
+	for _, line := range strings.Split(s, "\n") {
+		trimmed := strings.TrimSpace(line)
+		for _, d := range defs {
+			if strings.HasPrefix(trimmed, d.Function.Name+"(") {
+				return true
+			}
 		}
 	}
 	return false
