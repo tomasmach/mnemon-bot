@@ -3,11 +3,12 @@ package memory
 
 import (
 	"context"
-	"crypto/rand"
+	crand "crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,6 +39,16 @@ CREATE TABLE IF NOT EXISTS embeddings (
 
 CREATE INDEX IF NOT EXISTS idx_memories_server ON memories(server_id);
 CREATE INDEX IF NOT EXISTS idx_memories_user   ON memories(server_id, user_id);
+
+CREATE TABLE IF NOT EXISTS conversations (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id TEXT NOT NULL,
+    user_msg   TEXT NOT NULL,
+    tool_calls TEXT,  -- JSON array [{name, result}]
+    response   TEXT NOT NULL,
+    ts         DATETIME NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_conv_channel ON conversations(channel_id);
 `
 
 type Store struct {
@@ -75,7 +86,7 @@ func New(cfg *config.MemoryConfig, llmClient *llm.Client) (*Store, error) {
 
 func newID() (string, error) {
 	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := crand.Read(b); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
@@ -180,6 +191,83 @@ func (s *Store) UpdateContent(ctx context.Context, id, serverID, content string)
 		content, time.Now().UTC(), id, serverID,
 	)
 	return err
+}
+
+// ConversationRow holds a single persisted conversation turn returned by ListConversations.
+type ConversationRow struct {
+	ID        int64     `json:"id"`
+	ChannelID string    `json:"channel_id"`
+	UserMsg   string    `json:"user_msg"`
+	ToolCalls string    `json:"tool_calls,omitempty"`
+	Response  string    `json:"response"`
+	CreatedAt time.Time `json:"ts"`
+}
+
+// LogConversation inserts a single conversation turn into the conversations table.
+// toolCallsJSON may be empty if the LLM produced no tool calls.
+// Prunes the table 1 in 500 writes to keep it at most 10 000 rows.
+func (s *Store) LogConversation(ctx context.Context, channelID, userMsg, toolCallsJSON, response string) error {
+	var tc any
+	if toolCallsJSON != "" {
+		tc = toolCallsJSON
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO conversations (channel_id, user_msg, tool_calls, response, ts) VALUES (?, ?, ?, ?, ?)`,
+		channelID, userMsg, tc, response, time.Now().UTC(),
+	)
+	if err != nil {
+		return fmt.Errorf("insert conversation: %w", err)
+	}
+	if rand.IntN(500) == 0 {
+		// Use context.Background(): prune is a maintenance operation that should
+		// not be cancelled by the short-lived request context that triggered the write.
+		_, _ = s.db.ExecContext(context.Background(),
+			`DELETE FROM conversations WHERE id NOT IN (SELECT id FROM conversations ORDER BY id DESC LIMIT 10000)`,
+		)
+	}
+	return nil
+}
+
+// ListConversations returns conversation rows, optionally filtered by channelID.
+// Pass an empty channelID to list across all channels. Returns the total row count
+// (before pagination) alongside the page of results.
+func (s *Store) ListConversations(ctx context.Context, channelID string, limit, offset int) ([]ConversationRow, int, error) {
+	if limit == 0 {
+		limit = 50
+	}
+
+	var (
+		where string
+		args  []any
+	)
+	if channelID != "" {
+		where = "WHERE channel_id = ?"
+		args = []any{channelID}
+	}
+
+	var total int
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM conversations "+where, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count conversations: %w", err)
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT id, channel_id, user_msg, COALESCE(tool_calls, ''), response, ts FROM conversations "+where+" ORDER BY id DESC LIMIT ? OFFSET ?",
+		append(args, limit, offset)...,
+	)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list conversations: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ConversationRow
+	for rows.Next() {
+		var row ConversationRow
+		if err := rows.Scan(&row.ID, &row.ChannelID, &row.UserMsg, &row.ToolCalls, &row.Response, &row.CreatedAt); err != nil {
+			return nil, 0, fmt.Errorf("scan conversation: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, total, rows.Err()
 }
 
 func (s *Store) allEmbeddings(ctx context.Context, serverID string) (map[string][]float32, error) {

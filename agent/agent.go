@@ -3,6 +3,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -19,15 +20,19 @@ import (
 
 // ChannelAgent is a per-channel conversation goroutine.
 type ChannelAgent struct {
-	channelID  string
-	serverID   string
-	cfgStore   *config.Store
-	llm        *llm.Client
-	resources  *AgentResources
+	channelID string
+	serverID  string
+
+	cfgStore  *config.Store
+	llm       *llm.Client
+	resources *AgentResources
+	logger    *slog.Logger
+
 	soulText   string
-	history    []llm.Message                // capped to cfg.Agent.HistoryLimit
-	msgCh      chan *discordgo.MessageCreate // buffered 100
-	lastActive atomic.Int64                 // UnixNano; written by agent goroutine, read by Status()
+	history    []llm.Message  // capped to cfg.Agent.HistoryLimit
+	lastActive atomic.Int64   // UnixNano; written by agent goroutine, read by Status()
+
+	msgCh chan *discordgo.MessageCreate // buffered 100
 }
 
 // buildUserMessage converts a Discord message into an llm.Message, attaching
@@ -66,6 +71,7 @@ func newChannelAgent(channelID, serverID string, cfgStore *config.Store, llmClie
 		soulText:  soul.Load(cfgStore.Get(), serverID),
 		history:   make([]llm.Message, 0),
 		msgCh:     make(chan *discordgo.MessageCreate, 100),
+		logger:    slog.With("server_id", serverID, "channel_id", channelID),
 	}
 }
 
@@ -76,7 +82,7 @@ func (a *ChannelAgent) run(ctx context.Context) {
 		case msg := <-a.msgCh:
 			a.handleMessage(ctx, msg)
 		case <-time.After(idleTimeout):
-			slog.Info("channel agent idle timeout", "channel_id", a.channelID)
+			a.logger.Info("channel agent idle timeout")
 			return
 		case <-ctx.Done():
 			// drain only messages already buffered; no new ones can arrive after b.Stop()
@@ -102,7 +108,7 @@ func (a *ChannelAgent) backfillHistory(ctx context.Context, beforeID string) []l
 	}
 	msgs, err := a.resources.Session.ChannelMessages(a.channelID, limit, beforeID, "", "")
 	if err != nil {
-		slog.Warn("failed to backfill channel history", "error", err, "channel_id", a.channelID)
+		a.logger.Warn("failed to backfill channel history", "error", err)
 		return nil
 	}
 	botID := a.resources.Session.State.User.ID
@@ -158,7 +164,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	// Recall memories
 	memories, err := a.resources.Memory.Recall(ctx, msg.Content, a.serverID, 10)
 	if err != nil {
-		slog.Warn("memory recall error", "error", err, "channel_id", a.channelID)
+		a.logger.Warn("memory recall error", "error", err)
 	}
 
 	// Build system prompt
@@ -189,13 +195,18 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	msgs = append(msgs, userMsg)
 
 	// Tool-call loop
+	type toolCallRecord struct {
+		Name   string `json:"name"`
+		Result string `json:"result"`
+	}
+	var toolCalls []toolCallRecord
 	var assistantContent string
 	for iter := 0; iter < cfg.Agent.MaxToolIterations; iter++ {
 		choice, err := a.llm.Chat(ctx, buildMessages(systemPrompt, msgs), reg.Definitions())
 		if err != nil {
-			slog.Error("llm chat error", "error", err, "channel_id", a.channelID)
+			a.logger.Error("llm chat error", "error", err)
 			if err := sendFn("I encountered an error. Please try again."); err != nil {
-				slog.Error("send message", "err", err)
+				a.logger.Error("send message", "err", err)
 			}
 			return
 		}
@@ -210,12 +221,13 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 
 		// dispatch each tool call
 		for _, tc := range choice.Message.ToolCalls {
-			slog.Info("tool call", "tool", tc.Function.Name, "channel_id", a.channelID)
+			a.logger.Debug("tool call", "tool", tc.Function.Name)
 			result, err := reg.Dispatch(ctx, tc.Function.Name, []byte(tc.Function.Arguments))
 			if err != nil {
-				slog.Warn("tool dispatch error", "tool", tc.Function.Name, "error", err)
+				a.logger.Warn("tool dispatch error", "tool", tc.Function.Name, "error", err)
 				result = fmt.Sprintf("Error: %s", err)
 			}
+			toolCalls = append(toolCalls, toolCallRecord{Name: tc.Function.Name, Result: result})
 			msgs = append(msgs, llm.Message{
 				Role:       "tool",
 				Content:    result,
@@ -226,9 +238,28 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 
 		if iter == cfg.Agent.MaxToolIterations-1 {
 			if err := sendFn("I got stuck in a loop. Please try again."); err != nil {
-				slog.Error("send message", "err", err)
+				a.logger.Error("send message", "err", err)
 			}
 			return
+		}
+	}
+
+	// Log conversation on success — either plain-text reply or reply-tool response.
+	if assistantContent != "" || reg.Replied {
+		var toolCallsJSON string
+		if len(toolCalls) > 0 {
+			if b, err := json.Marshal(toolCalls); err == nil {
+				toolCallsJSON = string(b)
+			}
+		}
+		responseText := assistantContent
+		if responseText == "" && reg.Replied {
+			responseText = reg.ReplyText
+		}
+		// Use the formatted user message (as seen by the LLM), not the raw Discord content.
+		userMsgText := fmt.Sprintf("%s: %s", msg.Author.Username, msg.Content)
+		if err := a.resources.Memory.LogConversation(ctx, a.channelID, userMsgText, toolCallsJSON, responseText); err != nil {
+			a.logger.Warn("log conversation error", "error", err)
 		}
 	}
 
@@ -237,7 +268,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		parts := tools.SplitMessage(assistantContent, 2000)
 		for _, p := range parts {
 			if err := sendFn(p); err != nil {
-				slog.Error("send message", "err", err)
+				a.logger.Error("send message", "err", err)
 			}
 		}
 	}

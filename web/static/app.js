@@ -5,6 +5,10 @@
 let agents = [];
 let selectedAgentId = null;
 let currentMemServerID = null;
+let logsOffset = 0;
+let convsOffset = 0;
+const LOGS_LIMIT = 100;
+const CONVS_LIMIT = 20;
 
 // --- Init ---
 
@@ -61,7 +65,7 @@ function router() {
     return;
   }
 
-  const m = hash.match(/^#\/agents\/([^/]+?)(?:\/(config|soul|memories))?$/);
+  const m = hash.match(/^#\/agents\/([^/]+?)(?:\/(config|soul|memories|logs|conversations))?$/);
   if (m) {
     const id = decodeURIComponent(m[1]);
     const tab = m[2] || 'config';
@@ -121,6 +125,8 @@ function showPanel(name) {
 // --- Agent detail ---
 
 function populateAgentPanel(agent) {
+  logsOffset = 0;
+  convsOffset = 0;
   document.getElementById('agent-detail-name').textContent = agent.id;
   document.getElementById('cfg-server-id').value = agent.server_id || '';
   document.getElementById('cfg-token').value = '';
@@ -131,7 +137,7 @@ function populateAgentPanel(agent) {
 }
 
 function renderDetailTab(tab) {
-  ['config', 'soul', 'memories'].forEach(t => {
+  ['config', 'soul', 'memories', 'logs', 'conversations'].forEach(t => {
     document.getElementById('dtab-' + t).classList.toggle('active', t === tab);
     document.getElementById('detail-' + t).hidden = (t !== tab);
   });
@@ -144,6 +150,8 @@ function renderDetailTab(tab) {
       searchMemories();
     }
   }
+  if (tab === 'logs' && selectedAgentId) loadLogs();
+  if (tab === 'conversations' && selectedAgentId) loadConversations();
 }
 
 // --- Config tab ---
@@ -484,6 +492,145 @@ function confirmEdit() {
       else r.text().then(t => alert('Edit failed: ' + t));
     })
     .catch(() => alert('Edit failed.'));
+}
+
+// --- Logs tab ---
+
+function loadLogs() {
+  if (!selectedAgentId) return;
+  logsOffset = 0;
+  fetchLogs();
+}
+
+function fetchLogs() {
+  if (!selectedAgentId) return;
+  const level = document.getElementById('log-level-filter').value;
+  const params = new URLSearchParams({ limit: LOGS_LIMIT, offset: logsOffset });
+  if (level) params.set('level', level);
+
+  fetch('/api/agents/' + encodeURIComponent(selectedAgentId) + '/logs?' + params)
+    .then(r => r.json())
+    .then(data => renderLogs(data))
+    .catch(() => setStatus('logs-status', 'Failed to load logs.', true));
+}
+
+function renderLogs(data) {
+  const rows = data.logs || [];
+  const total = data.total || 0;
+  const countEl = document.getElementById('logs-count');
+  countEl.textContent = total + ' log' + (total !== 1 ? 's' : '');
+  countEl.hidden = false;
+
+  const table = document.getElementById('logs-table');
+  if (rows.length === 0) {
+    table.innerHTML = '<p class="empty-msg">No logs found.</p>';
+    document.getElementById('logs-pagination').innerHTML = '';
+    return;
+  }
+
+  table.innerHTML =
+    '<table class="log-table">' +
+    '<thead><tr><th>Time</th><th>Level</th><th>Message</th><th>Channel</th></tr></thead>' +
+    '<tbody>' +
+    rows.map(r => {
+      const t = r.ts ? new Date(r.ts).toLocaleString() : '';
+      const lvl = (r.level || '').toUpperCase();
+      return '<tr>' +
+        '<td class="log-time">' + esc(t) + '</td>' +
+        '<td><span class="badge log-badge-' + esc(lvl.toLowerCase()) + '">' + esc(lvl) + '</span></td>' +
+        '<td class="log-msg">' + esc(r.msg) + (r.attrs ? ' <span class="log-attrs">' + esc(r.attrs) + '</span>' : '') + '</td>' +
+        '<td class="log-channel">' + esc(r.channel_id || '') + '</td>' +
+        '</tr>';
+    }).join('') +
+    '</tbody></table>';
+
+  renderPagination('logs-pagination', total, logsOffset, LOGS_LIMIT, (newOffset) => {
+    logsOffset = newOffset;
+    fetchLogs();
+  });
+}
+
+// --- Conversations tab ---
+
+function loadConversations() {
+  if (!selectedAgentId) return;
+  convsOffset = 0;
+  fetchConversations();
+}
+
+function fetchConversations() {
+  if (!selectedAgentId) return;
+  const channelID = document.getElementById('conv-channel').value.trim();
+  const params = new URLSearchParams({ limit: CONVS_LIMIT, offset: convsOffset });
+  if (channelID) params.set('channel_id', channelID);
+
+  fetch('/api/agents/' + encodeURIComponent(selectedAgentId) + '/conversations?' + params)
+    .then(r => r.json())
+    .then(data => renderConversations(data))
+    .catch(() => setStatus('conv-status', 'Failed to load conversations.', true));
+}
+
+function renderConversations(data) {
+  const rows = data.conversations || [];
+  const total = data.total || 0;
+  const countEl = document.getElementById('conv-count');
+  countEl.textContent = total + ' conversation' + (total !== 1 ? 's' : '');
+  countEl.hidden = false;
+
+  const list = document.getElementById('conv-list');
+  if (rows.length === 0) {
+    list.innerHTML = '<p class="empty-msg">No conversations found.</p>';
+    document.getElementById('conv-pagination').innerHTML = '';
+    return;
+  }
+
+  list.innerHTML = rows.map(r => {
+    const t = r.ts ? new Date(r.ts).toLocaleString() : '';
+    const tools = r.tool_calls ? '<div class="conv-tools"><span class="conv-tools-label">Tools:</span> ' + esc(r.tool_calls) + '</div>' : '';
+    return '<div class="conv-card">' +
+      '<div class="conv-header">' +
+        '<span class="conv-channel">' + esc(r.channel_id || '') + '</span>' +
+        '<span class="conv-time">' + esc(t) + '</span>' +
+      '</div>' +
+      '<div class="conv-user"><span class="conv-role">User</span> ' + esc(r.user_msg) + '</div>' +
+      tools +
+      '<div class="conv-response"><span class="conv-role">Bot</span> ' + esc(r.response) + '</div>' +
+    '</div>';
+  }).join('');
+
+  renderPagination('conv-pagination', total, convsOffset, CONVS_LIMIT, (newOffset) => {
+    convsOffset = newOffset;
+    fetchConversations();
+  });
+}
+
+// --- Pagination ---
+
+function renderPagination(containerId, total, offset, limit, onNav) {
+  const container = document.getElementById(containerId);
+  const totalPages = Math.ceil(total / limit);
+  const currentPage = Math.floor(offset / limit);
+  if (totalPages <= 1) { container.innerHTML = ''; return; }
+
+  let html = '<div class="pagination">';
+  if (currentPage > 0) {
+    html += '<button class="btn-secondary">← Prev</button>';
+  }
+  html += '<span class="page-info">Page ' + (currentPage + 1) + ' of ' + totalPages + '</span>';
+  if (currentPage < totalPages - 1) {
+    html += '<button class="btn-secondary">Next →</button>';
+  }
+  html += '</div>';
+  container.innerHTML = html;
+
+  const buttons = container.querySelectorAll('button');
+  let btnIdx = 0;
+  if (currentPage > 0) {
+    buttons[btnIdx++].addEventListener('click', () => onNav((currentPage - 1) * limit));
+  }
+  if (currentPage < totalPages - 1) {
+    buttons[btnIdx].addEventListener('click', () => onNav((currentPage + 1) * limit));
+  }
 }
 
 // --- Monitor ---

@@ -134,6 +134,8 @@
           <button class="detail-tab active" id="dtab-config" onclick="navigateTab('config')">Config</button>
           <button class="detail-tab" id="dtab-soul" onclick="navigateTab('soul')">Soul</button>
           <button class="detail-tab" id="dtab-memories" onclick="navigateTab('memories')">Memories</button>
+          <button class="detail-tab" id="dtab-logs" onclick="navigateTab('logs')">Logs</button>
+          <button class="detail-tab" id="dtab-conversations" onclick="navigateTab('conversations')">Conversations</button>
         </div>
 
         <!-- Agent config tab -->
@@ -182,6 +184,36 @@
           <span id="mem-status" class="status-msg"></span>
           <span id="mem-count" class="result-count" hidden></span>
           <div id="mem-grid" class="card-grid"></div>
+        </div>
+
+        <!-- Agent logs tab -->
+        <div id="detail-logs" class="flex-1 overflow-y-auto px-6 py-5" hidden>
+          <div class="search-row">
+            <select id="log-level-filter">
+              <option value="">All levels</option>
+              <option value="debug">Debug</option>
+              <option value="info">Info</option>
+              <option value="warn">Warn</option>
+              <option value="error">Error</option>
+            </select>
+            <button class="btn-primary" onclick="loadLogs()">Refresh</button>
+          </div>
+          <span id="logs-status" class="status-msg"></span>
+          <span id="logs-count" class="result-count" hidden></span>
+          <div id="logs-table"></div>
+          <div id="logs-pagination" class="pagination-row"></div>
+        </div>
+
+        <!-- Agent conversations tab -->
+        <div id="detail-conversations" class="flex-1 overflow-y-auto px-6 py-5" hidden>
+          <div class="search-row">
+            <input id="conv-channel" type="text" placeholder="Channel ID (optional)">
+            <button class="btn-primary" onclick="loadConversations()">Refresh</button>
+          </div>
+          <span id="conv-status" class="status-msg"></span>
+          <span id="conv-count" class="result-count" hidden></span>
+          <div id="conv-list"></div>
+          <div id="conv-pagination" class="pagination-row"></div>
         </div>
       </div>
 
