@@ -50,6 +50,7 @@ func main() {
 
 	setupLogger(*logLevel, *logFormat, ls)
 	slog.Info("config loaded", "path", cfgPath)
+	slog.Info("log store opened", "path", logsDBPath)
 
 	if cfg.Tools.WebSearchKey == "" {
 		slog.Warn("tools.web_search_key not set, web_search tool disabled")
@@ -159,6 +160,9 @@ func main() {
 	}
 	cancel()
 	router.WaitForDrain()
+	if err := ls.Close(); err != nil {
+		slog.Warn("failed to close log store", "error", err)
+	}
 	slog.Info("shutdown complete")
 }
 

@@ -7,13 +7,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
-	"log/slog"
 )
 
 const migrationSQL = `
@@ -62,6 +62,11 @@ func Open(dbPath string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
+// Close closes the underlying database connection.
+func (s *Store) Close() error {
+	return s.db.Close()
+}
+
 // write persists a single log entry. Silently discards errors — logging the error
 // here would recurse back into slog. Prunes the table 1 in 500 writes to avoid O(N) overhead.
 func (s *Store) write(ctx context.Context, ts time.Time, level, msg, serverID, channelID, attrsJSON string) {
@@ -70,7 +75,9 @@ func (s *Store) write(ctx context.Context, ts time.Time, level, msg, serverID, c
 		ts, level, msg, serverID, channelID, attrsJSON,
 	)
 	if rand.IntN(500) == 0 {
-		s.prune(ctx)
+		// Use context.Background(): prune is a maintenance operation that should
+		// not be cancelled by the short-lived request context that triggered the write.
+		s.prune(context.Background())
 	}
 }
 

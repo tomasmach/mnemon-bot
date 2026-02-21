@@ -27,8 +27,8 @@ type ChannelAgent struct {
 	resources *AgentResources
 	logger    *slog.Logger
 	soulText   string
-	history    []llm.Message // capped to cfg.Agent.HistoryLimit
-	lastActive atomic.Int64  // UnixNano; written by agent goroutine, read by Status()
+	history    []llm.Message                // capped to cfg.Agent.HistoryLimit
+	lastActive atomic.Int64                 // UnixNano; written by agent goroutine, read by Status()
 	msgCh      chan *discordgo.MessageCreate // buffered 100
 }
 
@@ -249,7 +249,9 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 				toolCallsJSON = string(b)
 			}
 		}
-		if err := a.resources.Memory.LogConversation(ctx, a.channelID, msg.Content, toolCallsJSON, assistantContent); err != nil {
+		// Use the formatted user message (as seen by the LLM), not the raw Discord content.
+		userMsgText := fmt.Sprintf("%s: %s", msg.Author.Username, msg.Content)
+		if err := a.resources.Memory.LogConversation(ctx, a.channelID, userMsgText, toolCallsJSON, assistantContent); err != nil {
 			a.logger.Warn("log conversation error", "error", err)
 		}
 	}
