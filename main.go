@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/tomasmach/mnemon-bot/bot"
 	"github.com/tomasmach/mnemon-bot/config"
 	"github.com/tomasmach/mnemon-bot/llm"
+	"github.com/tomasmach/mnemon-bot/logstore"
 	"github.com/tomasmach/mnemon-bot/memory"
 	"github.com/tomasmach/mnemon-bot/web"
 )
@@ -25,8 +27,6 @@ func main() {
 	configPath := flag.String("config", "", "Path to config file")
 	flag.Parse()
 
-	setupLogger(*logLevel, *logFormat)
-
 	cfgPath := config.Resolve()
 	if *configPath != "" {
 		cfgPath = *configPath
@@ -34,12 +34,22 @@ func main() {
 
 	cfgStore, err := config.NewStore(cfgPath)
 	if err != nil {
+		// setupLogger not yet called; write to stderr via default slog
 		slog.Error("failed to load config", "error", err, "path", cfgPath)
 		os.Exit(1)
 	}
-	slog.Info("config loaded", "path", cfgPath)
 
 	cfg := cfgStore.Get()
+
+	logsDBPath := filepath.Join(filepath.Dir(config.ExpandPath(cfg.Memory.DBPath)), "logs.db")
+	ls, err := logstore.Open(logsDBPath)
+	if err != nil {
+		slog.Error("failed to open log store", "error", err)
+		os.Exit(1)
+	}
+
+	setupLogger(*logLevel, *logFormat, ls)
+	slog.Info("config loaded", "path", cfgPath)
 
 	if cfg.Tools.WebSearchKey == "" {
 		slog.Warn("tools.web_search_key not set, web_search tool disabled")
@@ -122,7 +132,7 @@ func main() {
 	}
 
 	webAddr := cfgStore.Get().Web.Addr
-	webServer := web.New(webAddr, cfgStore, cfgPath, router, nil)
+	webServer := web.New(webAddr, cfgStore, cfgPath, router, ls)
 	webServer.StartStatusPoller(ctx)
 	go func() {
 		if err := webServer.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -152,7 +162,7 @@ func main() {
 	slog.Info("shutdown complete")
 }
 
-func setupLogger(level, format string) {
+func setupLogger(level, format string, ls *logstore.Store) {
 	var l slog.Level
 	switch level {
 	case "debug":
@@ -170,6 +180,9 @@ func setupLogger(level, format string) {
 		h = slog.NewJSONHandler(os.Stderr, opts)
 	} else {
 		h = slog.NewTextHandler(os.Stderr, opts)
+	}
+	if ls != nil {
+		h = logstore.NewHandler(h, ls)
 	}
 	slog.SetDefault(slog.New(h))
 }
