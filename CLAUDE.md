@@ -55,6 +55,15 @@ Mnemon-bot is a Discord AI companion with persistent memory and a web management
 
 See [GO_CODE_STYLE.md](./GO_CODE_STYLE.md) for naming, error handling, logging, goroutine, and other Go conventions used in this project.
 
+## Testing
+
+Write tests for critical user paths and high-risk logic. Focus on behavior and outputs, not implementation details. Prioritize integration tests at external boundaries (SQLite, HTTP). Skip trivial getters, config loading, or experimental code.
+
+Run all tests:
+```bash
+go test ./...
+```
+
 ## Key Design Decisions
 
 - One goroutine per active Discord channel; idle timeout after `IdleTimeoutMinutes`

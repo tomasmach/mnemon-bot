@@ -66,6 +66,13 @@ func New(cfgStore *config.Store) *Client {
 	}
 }
 
+func (c *Client) apiBase() string {
+	if u := c.cfgStore.Get().LLM.BaseURL; u != "" {
+		return u
+	}
+	return "https://openrouter.ai/api/v1"
+}
+
 func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefinition) (Choice, error) {
 	cfg := c.cfgStore.Get().LLM
 	body := map[string]any{
@@ -76,7 +83,7 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolDefin
 		body["tools"] = tools
 	}
 
-	respBody, err := c.post(ctx, "https://openrouter.ai/api/v1/chat/completions", body)
+	respBody, err := c.post(ctx, c.apiBase()+"/chat/completions", body)
 	if err != nil {
 		return Choice{}, err
 	}
@@ -99,7 +106,7 @@ func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 		"input": text,
 	}
 
-	respBody, err := c.post(ctx, "https://openrouter.ai/api/v1/embeddings", body)
+	respBody, err := c.post(ctx, c.apiBase()+"/embeddings", body)
 	if err != nil {
 		return nil, err
 	}
