@@ -256,6 +256,16 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		}
 	}
 
+	if assistantContent != "" && looksLikeToolCall(assistantContent, reg.Definitions()) {
+		a.logger.Warn("suppressed tool-call syntax leaked into content", "content", assistantContent)
+		assistantContent = ""
+		if !reg.Replied {
+			if err := sendFn("I'm not sure how to respond. Please try again."); err != nil {
+				a.logger.Error("send message", "error", err)
+			}
+		}
+	}
+
 	// Log conversation on success — either plain-text reply or reply-tool response.
 	if assistantContent != "" || reg.Replied {
 		var toolCallsJSON string
@@ -293,6 +303,21 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 		msgs = msgs[len(msgs)-cfg.Agent.HistoryLimit:]
 	}
 	a.history = msgs
+}
+
+// looksLikeToolCall returns true when any line of s looks like a text-based
+// tool-call invocation (e.g. memory_save(content="...", ...)) rather than prose.
+// Checking per-line handles models that emit a preamble sentence before the call.
+func looksLikeToolCall(s string, defs []llm.ToolDefinition) bool {
+	for _, line := range strings.Split(s, "\n") {
+		trimmed := strings.TrimSpace(line)
+		for _, d := range defs {
+			if strings.HasPrefix(trimmed, d.Function.Name+"(") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // buildMessages constructs the message slice for the LLM with system prompt prepended.
