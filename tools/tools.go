@@ -25,7 +25,8 @@ type Tool interface {
 
 // Registry holds registered tools and provides dispatch.
 type Registry struct {
-	tools map[string]Tool
+	tools   map[string]Tool
+	Replied bool // set to true when the reply tool is called
 }
 
 // NewRegistry creates an empty registry.
@@ -184,7 +185,8 @@ func (t *memoryForgetTool) Call(ctx context.Context, args json.RawMessage) (stri
 }
 
 type replyTool struct {
-	send SendFunc
+	send    SendFunc
+	replied *bool
 }
 
 func (t *replyTool) Name() string { return "reply" }
@@ -213,6 +215,7 @@ func (t *replyTool) Call(ctx context.Context, args json.RawMessage) (string, err
 			return "", err
 		}
 	}
+	*t.replied = true
 	return "Replied.", nil
 }
 
@@ -344,7 +347,7 @@ func NewDefaultRegistry(store *memory.Store, serverID string, send SendFunc, rea
 	r.Register(&memorySaveTool{store: store, serverID: serverID})
 	r.Register(&memoryRecallTool{store: store, serverID: serverID})
 	r.Register(&memoryForgetTool{store: store, serverID: serverID})
-	r.Register(&replyTool{send: send})
+	r.Register(&replyTool{send: send, replied: &r.Replied})
 	r.Register(&reactTool{react: react})
 	if webSearchKey != "" {
 		r.Register(&webSearchTool{apiKey: webSearchKey})

@@ -166,7 +166,7 @@ func (a *ChannelAgent) handleMessage(ctx context.Context, msg *discordgo.Message
 	}
 
 	// If assistant replied with text content (not via reply tool), send it
-	if assistantContent != "" {
+	if assistantContent != "" && !reg.Replied {
 		parts := tools.SplitMessage(assistantContent, 2000)
 		for _, p := range parts {
 			if err := sendFn(p); err != nil {
