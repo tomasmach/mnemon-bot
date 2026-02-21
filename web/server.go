@@ -56,6 +56,8 @@ func New(addr string, cfgStore *config.Store, cfgPath string, router *agent.Rout
 	mux.HandleFunc("DELETE /api/agents/{id}", s.handleDeleteAgent)
 	mux.HandleFunc("GET /api/agents/{id}/soul", s.handleGetAgentSoul)
 	mux.HandleFunc("PUT /api/agents/{id}/soul", s.handlePutAgentSoul)
+	mux.HandleFunc("GET /api/soul", s.handleGetGlobalSoul)
+	mux.HandleFunc("PUT /api/soul", s.handlePutGlobalSoul)
 	sub, _ := fs.Sub(staticFiles, "static")
 	mux.HandleFunc("/", http.FileServer(http.FS(sub)).ServeHTTP)
 
@@ -542,6 +544,114 @@ func (s *Server) handlePutAgentSoul(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to update config", http.StatusInternalServerError)
 			return
 		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"path": soulPath})
+}
+
+func (s *Server) handleGetGlobalSoul(w http.ResponseWriter, r *http.Request) {
+	cfg := s.cfgStore.Get()
+	w.Header().Set("Content-Type", "application/json")
+	if cfg.Bot.SoulFile == "" {
+		json.NewEncoder(w).Encode(map[string]any{
+			"content":       "",
+			"path":          "",
+			"using_default": true,
+		})
+		return
+	}
+	expanded := config.ExpandPath(cfg.Bot.SoulFile)
+	data, err := os.ReadFile(expanded)
+	if err != nil {
+		if os.IsNotExist(err) {
+			json.NewEncoder(w).Encode(map[string]any{"content": "", "path": expanded})
+			return
+		}
+		slog.Error("read global soul file", "error", err)
+		http.Error(w, "failed to read soul file", http.StatusInternalServerError)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{"content": string(data), "path": expanded})
+}
+
+func (s *Server) handlePutGlobalSoul(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	cfg := s.cfgStore.Get()
+	var soulPath string
+	needsConfigUpdate := false
+
+	if cfg.Bot.SoulFile == "" {
+		soulPath = filepath.Join(filepath.Dir(s.cfgPath), "soul.md")
+		needsConfigUpdate = true
+	} else {
+		soulPath = config.ExpandPath(cfg.Bot.SoulFile)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(soulPath), 0o755); err != nil {
+		slog.Error("create soul dir", "error", err)
+		http.Error(w, "failed to create directory", http.StatusInternalServerError)
+		return
+	}
+	if err := os.WriteFile(soulPath, []byte(body.Content), 0o644); err != nil {
+		slog.Error("write global soul file", "error", err)
+		http.Error(w, "failed to write soul file", http.StatusInternalServerError)
+		return
+	}
+
+	if needsConfigUpdate {
+		data, err := os.ReadFile(s.cfgPath)
+		if err != nil {
+			http.Error(w, "failed to read config", http.StatusInternalServerError)
+			return
+		}
+		var raw map[string]any
+		if err := toml.Unmarshal(data, &raw); err != nil {
+			http.Error(w, "failed to parse config", http.StatusInternalServerError)
+			return
+		}
+		bot, _ := raw["bot"].(map[string]any)
+		if bot == nil {
+			bot = make(map[string]any)
+		}
+		bot["soul_file"] = soulPath
+		raw["bot"] = bot
+
+		var buf bytes.Buffer
+		if err := toml.NewEncoder(&buf).Encode(raw); err != nil {
+			http.Error(w, "failed to encode config", http.StatusInternalServerError)
+			return
+		}
+		tmpPath := s.cfgPath + ".tmp"
+		if err := os.WriteFile(tmpPath, buf.Bytes(), 0o644); err != nil {
+			http.Error(w, "failed to write config", http.StatusInternalServerError)
+			return
+		}
+		if _, err := config.Load(tmpPath); err != nil {
+			os.Remove(tmpPath)
+			http.Error(w, fmt.Sprintf("invalid config: %v", err), http.StatusBadRequest)
+			return
+		}
+		if err := os.Rename(tmpPath, s.cfgPath); err != nil {
+			os.Remove(tmpPath)
+			http.Error(w, "failed to save config", http.StatusInternalServerError)
+			return
+		}
+		if _, err := s.cfgStore.Reload(); err != nil {
+			http.Error(w, fmt.Sprintf("reload failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		s.broadcast("event: config_reloaded\ndata: {}\n\n")
 	}
 
 	w.Header().Set("Content-Type", "application/json")

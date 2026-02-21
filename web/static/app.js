@@ -14,7 +14,6 @@ function init() {
   window.addEventListener('hashchange', router);
   document.getElementById('btn-settings').addEventListener('click', () => navigate('#/config'));
   document.getElementById('btn-new-agent').addEventListener('click', () => navigate('#/agents/new'));
-  document.getElementById('btn-save-config').addEventListener('click', saveConfig);
 }
 
 // --- Router ---
@@ -30,14 +29,27 @@ function navigateTab(tab) {
     : '#/agents/' + encodeURIComponent(selectedAgentId) + '/' + tab);
 }
 
+function navigateConfigTab(tab) {
+  navigate(tab === 'soul' ? '#/config/soul' : '#/config');
+}
+
+function renderConfigTab(tab) {
+  ['config', 'soul'].forEach(t => {
+    document.getElementById('ctab-' + t).classList.toggle('active', t === tab);
+    document.getElementById('global-' + t).hidden = (t !== tab);
+  });
+  if (tab === 'config') loadConfig();
+  if (tab === 'soul') loadGlobalSoul();
+}
+
 function router() {
   const hash = location.hash;
 
-  if (hash === '#/config') {
+  if (hash === '#/config' || hash === '#/config/soul') {
     selectedAgentId = null;
     renderAgentSidebar();
     showPanel('config');
-    loadConfig();
+    renderConfigTab(hash === '#/config/soul' ? 'soul' : 'config');
     return;
   }
 
@@ -213,6 +225,44 @@ function saveSoul() {
 
 function setSoulStatus(msg, isError) {
   setStatus('soul-status', msg, isError);
+}
+
+// --- Global soul ---
+
+function loadGlobalSoul() {
+  document.getElementById('global-soul-editor').value = '';
+  document.getElementById('global-soul-path-info').textContent = 'Loading…';
+  document.getElementById('global-soul-status').textContent = '';
+
+  fetch('/api/soul')
+    .then(r => r.json())
+    .then(data => {
+      document.getElementById('global-soul-editor').value = data.content || '';
+      document.getElementById('global-soul-path-info').textContent = data.using_default
+        ? 'No soul file configured — will be auto-created on save.'
+        : (data.path || '');
+    })
+    .catch(() => {
+      document.getElementById('global-soul-path-info').textContent = 'Failed to load soul.';
+    });
+}
+
+function saveGlobalSoul() {
+  const content = document.getElementById('global-soul-editor').value;
+  fetch('/api/soul', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  })
+    .then(r => {
+      if (r.ok) return r.json();
+      return r.text().then(t => { throw new Error(t || 'Save failed'); });
+    })
+    .then(data => {
+      setStatus('global-soul-status', 'Saved.', false);
+      document.getElementById('global-soul-path-info').textContent = data.path;
+    })
+    .catch(e => setStatus('global-soul-status', e.message, true));
 }
 
 // --- Global config ---
