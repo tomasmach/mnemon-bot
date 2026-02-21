@@ -36,6 +36,7 @@ type LLMConfig struct {
 	Model                 string `toml:"model"`
 	EmbeddingModel        string `toml:"embedding_model"`
 	RequestTimeoutSeconds int    `toml:"request_timeout_seconds"`
+	BaseURL               string `toml:"-" json:"-"` // override for tests; not read from TOML
 }
 
 type MemoryConfig struct {
@@ -169,6 +170,11 @@ type Store struct {
 	mu   sync.RWMutex
 	cfg  *Config
 	path string
+}
+
+// NewStoreFromConfig creates a Store from a pre-built Config (for testing).
+func NewStoreFromConfig(cfg *Config) *Store {
+	return &Store{cfg: cfg}
 }
 
 func NewStore(path string) (*Store, error) {
